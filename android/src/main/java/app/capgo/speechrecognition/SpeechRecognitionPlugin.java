@@ -329,7 +329,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         public void onError(int error) {
             stopListening();
             String errorMssg = getErrorText(error);
-            Logger.error(TAG, "Recognizer error: " + errorMssg);
+            Logger.error(TAG, "Recognizer error: " + errorMssg, null);
 
             if (call != null) {
                 call.reject(errorMssg);

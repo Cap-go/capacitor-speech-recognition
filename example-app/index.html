@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@capgo/capacitor-speech-recognition Example</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>@capgo/capacitor-speech-recognition Demo</h1>
+        <p class="lead">Check availability, permissions, and stream live transcripts from the local plugin build.</p>
+      </header>
+
+      <section class="card">
+        <h2>Status</h2>
+        <div class="status-grid">
+          <div>
+            <span>Available</span>
+            <strong id="availability">unknown</strong>
+          </div>
+          <div>
+            <span>Permission</span>
+            <strong id="permission">unknown</strong>
+          </div>
+          <div>
+            <span>Listening</span>
+            <strong id="listening">no</strong>
+          </div>
+        </div>
+        <div class="button-row">
+          <button id="check-availability">Check Availability</button>
+          <button id="check-permission">Check Permission</button>
+          <button id="request-permission">Request Permission</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Listening Options</h2>
+        <div class="form-grid">
+          <label>
+            Locale
+            <input id="language" type="text" value="en-US" autocomplete="off" />
+          </label>
+          <label>
+            Max Results
+            <input id="max-results" type="number" min="1" max="5" value="3" />
+          </label>
+          <label>
+            Prompt (Android popup)
+            <input id="prompt" type="text" placeholder="Say something..." />
+          </label>
+          <label>
+            Allow Silence (ms · Android)
+            <input id="allow-silence" type="number" min="0" step="500" value="0" />
+          </label>
+          <label class="checkbox">
+            <input id="partial-results" type="checkbox" checked />
+            <span>Stream partial results</span>
+          </label>
+          <label class="checkbox">
+            <input id="popup" type="checkbox" />
+            <span>Use Android popup UI</span>
+          </label>
+          <label class="checkbox">
+            <input id="add-punctuation" type="checkbox" />
+            <span>Add punctuation (iOS 16+)</span>
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="start-listening">Start Listening</button>
+          <button id="stop-listening" class="ghost">Stop</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Events</h2>
+        <div id="event-log" class="event-log">
+          <p class="muted">Events appear here once actions run.</p>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

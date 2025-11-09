@@ -1,0 +1,10 @@
+{
+  "appId": "app.capgo.speechrecognition",
+  "appName": "Speech Recognition Example",
+  "webDir": "dist",
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": false
+    }
+  }
+}

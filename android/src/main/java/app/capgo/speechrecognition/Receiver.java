@@ -11,6 +11,7 @@ import com.getcapacitor.PluginCall;
 import java.util.List;
 
 public class Receiver extends BroadcastReceiver implements Constants {
+
     private List<String> supportedLanguagesList;
     private String languagePref;
     private final PluginCall call;

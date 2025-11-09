@@ -239,14 +239,14 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private void stopListening() {
         bridge
             .getWebView()
-                .post(() -> {
-                    try {
-                        lock.lock();
-                        if (listening) {
-                            Logger.debug(TAG, "Stopping inline recognizer");
-                            speechRecognizer.stopListening();
-                            listening(false);
-                        }
+            .post(() -> {
+                try {
+                    lock.lock();
+                    if (listening) {
+                        Logger.debug(TAG, "Stopping inline recognizer");
+                        speechRecognizer.stopListening();
+                        listening(false);
+                    }
                 } catch (Exception ex) {
                     throw ex;
                 } finally {

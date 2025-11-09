@@ -41,11 +41,13 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func start(_ call: CAPPluginCall) {
         if self.audioEngine.isRunning || recognitionTask != nil {
+            CAPLog.print("[SpeechRecognition] Attempted to start while already running")
             call.reject("Speech recognition is already running.")
             return
         }
 
         guard isSpeechPermissionGranted else {
+            CAPLog.print("[SpeechRecognition] Missing speech permission, rejecting start()")
             call.reject("Missing speech recognition permission.")
             return
         }
@@ -59,9 +61,11 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         self.activeCall = call
         self.currentOptions = options
+        CAPLog.print("[SpeechRecognition] Starting session | language=\(options.language) partialResults=\(options.partialResults) punctuation=\(options.addPunctuation)")
 
         AVAudioSession.sharedInstance().requestRecordPermission { granted in
             guard granted else {
+                CAPLog.print("[SpeechRecognition] Microphone permission denied by user")
                 DispatchQueue.main.async {
                     call.reject("User denied microphone access.")
                     self.cleanupRecognition(notifyStop: false)
@@ -76,6 +80,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func stop(_ call: CAPPluginCall) {
+        CAPLog.print("[SpeechRecognition] stop() invoked")
         cleanupRecognition(notifyStop: true)
         call.resolve()
     }
@@ -209,6 +214,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func cleanupRecognition(notifyStop: Bool) {
         DispatchQueue.main.async {
+            CAPLog.print("[SpeechRecognition] Cleaning up recognition resources")
             if self.audioEngine.isRunning {
                 self.audioEngine.stop()
             }
@@ -234,6 +240,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func handleRecognitionError(_ error: Error) {
         DispatchQueue.main.async {
+            CAPLog.print("[SpeechRecognition] Error from recognizer: \(error.localizedDescription)")
             self.cleanupRecognition(notifyStop: true)
             self.activeCall?.reject(error.localizedDescription)
         }

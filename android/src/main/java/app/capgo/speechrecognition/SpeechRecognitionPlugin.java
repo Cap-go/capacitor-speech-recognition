@@ -63,11 +63,13 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     @PluginMethod
     public void start(PluginCall call) {
         if (!SpeechRecognizer.isRecognitionAvailable(bridge.getContext())) {
+            Logger.warn(TAG, "start() called but speech recognizer unavailable");
             call.unavailable(NOT_AVAILABLE);
             return;
         }
 
         if (getPermissionState(SPEECH_RECOGNITION) != PermissionState.GRANTED) {
+            Logger.warn(TAG, "start() missing RECORD_AUDIO permission");
             call.reject(MISSING_PERMISSION);
             return;
         }
@@ -78,11 +80,23 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         boolean partialResults = call.getBoolean("partialResults", false);
         boolean popup = call.getBoolean("popup", false);
         int allowForSilence = call.getInt("allowForSilence", 0);
+        Logger.info(
+            TAG,
+            String.format(
+                "Starting recognition | lang=%s maxResults=%d partial=%s popup=%s allowForSilence=%d",
+                language,
+                maxResults,
+                partialResults,
+                popup,
+                allowForSilence
+            )
+        );
         beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence);
     }
 
     @PluginMethod
     public void stop(final PluginCall call) {
+        Logger.info(TAG, "stop() requested");
         try {
             stopListening();
         } catch (Exception ex) {
@@ -225,13 +239,14 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private void stopListening() {
         bridge
             .getWebView()
-            .post(() -> {
-                try {
-                    lock.lock();
-                    if (listening) {
-                        speechRecognizer.stopListening();
-                        listening(false);
-                    }
+                .post(() -> {
+                    try {
+                        lock.lock();
+                        if (listening) {
+                            Logger.debug(TAG, "Stopping inline recognizer");
+                            speechRecognizer.stopListening();
+                            listening(false);
+                        }
                 } catch (Exception ex) {
                     throw ex;
                 } finally {
@@ -280,6 +295,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 JSObject ret = new JSObject();
                 ret.put("status", "started");
                 notifyListeners(LISTENING_EVENT, ret);
+                Logger.debug(TAG, "Listening started");
             } finally {
                 lock.unlock();
             }
@@ -313,6 +329,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         public void onError(int error) {
             stopListening();
             String errorMssg = getErrorText(error);
+            Logger.error(TAG, "Recognizer error: " + errorMssg);
 
             if (call != null) {
                 call.reject(errorMssg);
@@ -325,6 +342,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
             try {
                 JSArray jsArray = new JSArray(matches);
+                Logger.debug(TAG, "Received final results count=" + (matches == null ? 0 : matches.size()));
 
                 if (call != null) {
                     if (!partialResults) {
@@ -353,6 +371,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                     JSObject ret = new JSObject();
                     ret.put("matches", previousPartialResults);
                     notifyListeners(PARTIAL_RESULTS_EVENT, ret);
+                    Logger.debug(TAG, "Partial results updated");
                 }
             } catch (Exception ex) {}
         }
@@ -367,12 +386,14 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 JSObject ret = new JSObject();
                 ret.put("matches", new JSArray(matches));
                 notifyListeners(SEGMENT_RESULTS_EVENT, ret);
+                Logger.debug(TAG, "Segment results emitted");
             } catch (Exception ignored) {}
         }
 
         @Override
         public void onEndOfSegmentedSession() {
             notifyListeners(END_OF_SEGMENT_EVENT, new JSObject());
+            Logger.debug(TAG, "Segmented session ended");
         }
 
         @Override

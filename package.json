@@ -24,6 +24,7 @@
   "bugs": {
     "url": "https://github.com/Cap-go/capacitor-speech-recognition/issues"
   },
+  "homepage": "https://capgo.app/docs/plugins/speech-recognition/",
   "keywords": [
     "capacitor",
     "plugin",

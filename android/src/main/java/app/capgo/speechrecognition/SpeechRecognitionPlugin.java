@@ -210,38 +210,42 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
         }
 
+        resetPartialResultsCache();
+
         if (showPopup) {
-            startActivityForResult(call, intent, "listeningResult");
-        } else {
             bridge
-                .getWebView()
-                .post(() -> {
+                .getActivity()
+                .runOnUiThread(() -> {
                     try {
-                        lock.lock();
-
-                        if (speechRecognizer != null) {
-                            speechRecognizer.cancel();
-                            speechRecognizer.destroy();
-                            speechRecognizer = null;
-                        }
-
-                        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
-                        SpeechRecognitionListener listener = new SpeechRecognitionListener();
-                        listener.setCall(call);
-                        listener.setPartialResults(partialResults);
-                        speechRecognizer.setRecognitionListener(listener);
-                        speechRecognizer.startListening(intent);
-                        listening(true);
-                        if (partialResults) {
-                            call.resolve();
-                        }
+                        SpeechRecognitionPlugin.this.listening(true);
+                        SpeechRecognitionPlugin.this.startActivityForResult(call, intent, "listeningResult");
                     } catch (Exception ex) {
+                        SpeechRecognitionPlugin.this.listening(false);
                         call.reject(ex.getMessage());
-                    } finally {
-                        lock.unlock();
                     }
                 });
+            return;
         }
+
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    SpeechRecognitionPlugin.this.lock.lock();
+                    Logger.info(getLogTag(), "Rebuilding and starting recognizer");
+                    rebuildRecognizerLocked(call, partialResults);
+                    speechRecognizer.startListening(intent);
+                    SpeechRecognitionPlugin.this.listening(true);
+                    if (partialResults) {
+                        call.resolve();
+                    }
+                } catch (Exception ex) {
+                    Logger.error(getLogTag(), "Error starting listening: " + ex.getMessage(), ex);
+                    call.reject(ex.getMessage());
+                } finally {
+                    SpeechRecognitionPlugin.this.lock.unlock();
+                }
+            });
     }
 
     private void stopListening() {
@@ -249,22 +253,71 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             .getWebView()
             .post(() -> {
                 try {
-                    lock.lock();
-                    if (listening) {
-                        Logger.debug(TAG, "Stopping inline recognizer");
-                        speechRecognizer.stopListening();
-                        listening(false);
+                    SpeechRecognitionPlugin.this.lock.lock();
+                    Logger.info(getLogTag(), "Stopping listening");
+                    if (speechRecognizer != null) {
+                        try {
+                            speechRecognizer.stopListening();
+                        } catch (Exception ignored) {}
+                        try {
+                            speechRecognizer.cancel();
+                        } catch (Exception ignored) {}
+                        // Don't destroy here - let rebuildRecognizerLocked handle cleanup
                     }
-                } catch (Exception ex) {
-                    throw ex;
+                    resetPartialResultsCache();
+                    SpeechRecognitionPlugin.this.listening(false);
                 } finally {
-                    lock.unlock();
+                    SpeechRecognitionPlugin.this.lock.unlock();
                 }
             });
     }
 
+    private void destroyRecognizer() {
+        bridge.getWebView().post(() -> {
+            try {
+                SpeechRecognitionPlugin.this.lock.lock();
+                if (speechRecognizer != null) {
+                    speechRecognizer.destroy();
+                    speechRecognizer = null;
+                }
+            } finally {
+                SpeechRecognitionPlugin.this.lock.unlock();
+            }
+        });
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        super.handleOnDestroy();
+        destroyRecognizer();
+    }
+
     private void listening(boolean value) {
         this.listening = value;
+    }
+
+    private void resetPartialResultsCache() {
+        previousPartialResults = new JSONArray();
+    }
+
+    private void rebuildRecognizerLocked(PluginCall call, boolean partialResults) {
+        // Reuse the existing recognizer if available - destroying/recreating causes ERROR_SERVER_DISCONNECTED (11)
+        // Only create new if null (first time or after an error destroyed it)
+        if (speechRecognizer == null) {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
+            Logger.info(getLogTag(), "Created new SpeechRecognizer instance");
+        } else {
+            // Cancel any pending recognition before starting a new one
+            try {
+                speechRecognizer.cancel();
+            } catch (Exception ignored) {}
+            Logger.info(getLogTag(), "Reusing existing SpeechRecognizer instance");
+        }
+
+        SpeechRecognitionListener listener = new SpeechRecognitionListener();
+        listener.setCall(call);
+        listener.setPartialResults(partialResults);
+        speechRecognizer.setRecognitionListener(listener);
     }
 
     private String permissionStateValue(PermissionState state) {
@@ -335,8 +388,23 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onError(int error) {
-            stopListening();
             String errorMssg = getErrorText(error);
+
+            // Reset state synchronously on the same thread
+            resetPartialResultsCache();
+            SpeechRecognitionPlugin.this.listening(false);
+
+            // Destroy the recognizer synchronously to ensure clean state for next attempt
+            if (speechRecognizer != null) {
+                try {
+                    speechRecognizer.cancel();
+                } catch (Exception ignored) {}
+                try {
+                    speechRecognizer.destroy();
+                } catch (Exception ignored) {}
+                speechRecognizer = null;
+            }
+
             Logger.error(TAG, "Recognizer error: " + errorMssg, null);
 
             if (call != null) {
@@ -365,6 +433,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 if (call != null) {
                     call.resolve(new JSObject().put("status", "error").put("message", ex.getMessage()));
                 }
+            } finally {
+                resetPartialResultsCache();
             }
         }
 
@@ -428,8 +498,10 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 return "Error from server";
             case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
                 return "No speech input";
+            case SpeechRecognizer.ERROR_SERVER_DISCONNECTED:
+                return "Server disconnected";
             default:
-                return "Didn't understand, please try again.";
+                return "Didn't understand, please try again. Error code: " + errorCode;
         }
     }
 }

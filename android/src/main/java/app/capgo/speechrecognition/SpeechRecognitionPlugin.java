@@ -222,10 +222,14 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 .getActivity()
                 .runOnUiThread(() -> {
                     try {
+                        SpeechRecognitionPlugin.this.lock.lock();
                         SpeechRecognitionPlugin.this.listening(true);
+                        SpeechRecognitionPlugin.this.lock.unlock();
                         SpeechRecognitionPlugin.this.startActivityForResult(call, intent, "listeningResult");
                     } catch (Exception ex) {
+                        SpeechRecognitionPlugin.this.lock.lock();
                         SpeechRecognitionPlugin.this.listening(false);
+                        SpeechRecognitionPlugin.this.lock.unlock();
                         call.reject(ex.getMessage());
                     }
                 });

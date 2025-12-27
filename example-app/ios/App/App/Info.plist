@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CAPACITOR_DEBUG</key>
+	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
@@ -45,9 +47,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>We use speech recognition to convert your voice into text inside the demo application.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is required to capture audio for speech recognition.</string>
 </dict>
 </plist>

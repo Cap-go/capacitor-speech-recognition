@@ -11,7 +11,7 @@ private enum PermissionState: String {
 
 @objc(SpeechRecognitionPlugin)
 public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
-    private let pluginVersion: String = "8.0.5"
+    private let pluginVersion: String = "8.0.6"
     public let identifier = "SpeechRecognitionPlugin"
     public let jsName = "SpeechRecognition"
     public let pluginMethods: [CAPPluginMethod] = [

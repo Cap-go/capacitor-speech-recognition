@@ -83,6 +83,35 @@ export interface SpeechRecognitionListening {
   listening: boolean;
 }
 
+/**
+ * Options for the forceStop method.
+ */
+export interface ForceStopOptions {
+  /**
+   * Timeout in milliseconds before forcing stop via destroy/recreate.
+   * Defaults to 1500ms.
+   */
+  timeout?: number;
+}
+
+/**
+ * Result from getLastPartialResult.
+ */
+export interface LastPartialResult {
+  /**
+   * Whether a partial result is available.
+   */
+  available: boolean;
+  /**
+   * The last partial transcription text.
+   */
+  text: string;
+  /**
+   * All partial match alternatives.
+   */
+  matches?: string[];
+}
+
 export interface SpeechRecognitionPlugin {
   /**
    * Checks whether the native speech recognition service is usable on the current device.
@@ -99,6 +128,28 @@ export interface SpeechRecognitionPlugin {
    * Stops listening and tears down native resources.
    */
   stop(): Promise<void>;
+  /**
+   * Force stops recognition with a timeout fallback.
+   *
+   * This is useful for Push-to-Talk (PTT) implementations where you need
+   * reliable stopping behavior. The Android SpeechRecognizer.stopListening()
+   * doesn't always stop audio capture reliably.
+   *
+   * This method:
+   * 1. Tries graceful stopListening() first
+   * 2. After timeout, forces stop by destroying and recreating the recognizer
+   * 3. Returns the last cached partial result so no speech is lost
+   *
+   * @param options - Optional timeout configuration
+   */
+  forceStop(options?: ForceStopOptions): Promise<void>;
+  /**
+   * Gets the last cached partial transcription result.
+   *
+   * Useful for retrieving what was heard before a force stop,
+   * or checking the current partial state at any time.
+   */
+  getLastPartialResult(): Promise<LastPartialResult>;
   /**
    * Gets the locales supported by the underlying recognizer.
    *

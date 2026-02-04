@@ -44,6 +44,13 @@ export interface SpeechRecognitionStartOptions {
    * Required to be greater than zero and currently supported on Android only.
    */
   allowForSilence?: number;
+  /**
+   * EXPERIMENTAL: Enable continuous PTT mode.
+   * When enabled and used with setPTTState(), recognition will auto-restart on silence
+   * while the PTT button is held, accumulating results across restarts.
+   * Android only.
+   */
+  continuousPTT?: boolean;
 }
 
 /**
@@ -112,6 +119,17 @@ export interface LastPartialResult {
   matches?: string[];
 }
 
+/**
+ * Options for setPTTState method.
+ */
+export interface PTTStateOptions {
+  /**
+   * Whether the PTT button is currently held.
+   * Set to true on button press, false on button release.
+   */
+  held: boolean;
+}
+
 export interface SpeechRecognitionPlugin {
   /**
    * Checks whether the native speech recognition service is usable on the current device.
@@ -150,6 +168,16 @@ export interface SpeechRecognitionPlugin {
    * or checking the current partial state at any time.
    */
   getLastPartialResult(): Promise<LastPartialResult>;
+  /**
+   * EXPERIMENTAL: Set PTT button state for continuous PTT mode.
+   *
+   * When continuousPTT is enabled in start() and held is true,
+   * recognition will auto-restart on silence, accumulating results.
+   * Call with held=false when the button is released.
+   *
+   * @param options - PTT state options
+   */
+  setPTTState(options: PTTStateOptions): Promise<void>;
   /**
    * Gets the locales supported by the underlying recognizer.
    *

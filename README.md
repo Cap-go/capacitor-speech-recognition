@@ -80,6 +80,9 @@ Add the following keys to your app `Info.plist`:
 * [`available()`](#available)
 * [`start(...)`](#start)
 * [`stop()`](#stop)
+* [`forceStop(...)`](#forcestop)
+* [`getLastPartialResult()`](#getlastpartialresult)
+* [`setPTTState(...)`](#setpttstate)
 * [`getSupportedLanguages()`](#getsupportedlanguages)
 * [`isListening()`](#islistening)
 * [`checkPermissions()`](#checkpermissions)
@@ -138,6 +141,65 @@ stop() => Promise<void>
 ```
 
 Stops listening and tears down native resources.
+
+--------------------
+
+
+### forceStop(...)
+
+```typescript
+forceStop(options?: ForceStopOptions | undefined) => Promise<void>
+```
+
+Force stops recognition with a timeout fallback.
+
+This is useful for Push-to-Talk (PTT) implementations where you need
+reliable stopping behavior. The Android SpeechRecognizer.stopListening()
+doesn't always stop audio capture reliably.
+
+This method:
+1. Tries graceful stopListening() first
+2. After timeout, forces stop by destroying and recreating the recognizer
+3. Returns the last cached partial result so no speech is lost
+
+| Param         | Type                                                          | Description                      |
+| ------------- | ------------------------------------------------------------- | -------------------------------- |
+| **`options`** | <code><a href="#forcestopoptions">ForceStopOptions</a></code> | - Optional timeout configuration |
+
+--------------------
+
+
+### getLastPartialResult()
+
+```typescript
+getLastPartialResult() => Promise<LastPartialResult>
+```
+
+Gets the last cached partial transcription result.
+
+Useful for retrieving what was heard before a force stop,
+or checking the current partial state at any time.
+
+**Returns:** <code>Promise&lt;<a href="#lastpartialresult">LastPartialResult</a>&gt;</code>
+
+--------------------
+
+
+### setPTTState(...)
+
+```typescript
+setPTTState(options: PTTStateOptions) => Promise<void>
+```
+
+EXPERIMENTAL: Set PTT button state for continuous PTT mode.
+
+When continuousPTT is enabled in start() and held is true,
+recognition will auto-restart on silence, accumulating results.
+Call with held=false when the button is released.
+
+| Param         | Type                                                        | Description         |
+| ------------- | ----------------------------------------------------------- | ------------------- |
+| **`options`** | <code><a href="#pttstateoptions">PTTStateOptions</a></code> | - PTT state options |
 
 --------------------
 
@@ -315,15 +377,45 @@ Removes every registered listener.
 
 Configure how the recognizer behaves when calling {@link SpeechRecognitionPlugin.start}.
 
-| Prop                  | Type                 | Description                                                                                                                                                                 |
-| --------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`language`**        | <code>string</code>  | Locale identifier such as `en-US`. When omitted the device language is used.                                                                                                |
-| **`maxResults`**      | <code>number</code>  | Maximum number of final matches returned by native APIs. Defaults to `5`.                                                                                                   |
-| **`prompt`**          | <code>string</code>  | Prompt message shown inside the Android system dialog (ignored on iOS).                                                                                                     |
-| **`popup`**           | <code>boolean</code> | When `true`, Android shows the OS speech dialog instead of running inline recognition. Defaults to `false`.                                                                 |
-| **`partialResults`**  | <code>boolean</code> | Emits partial transcription updates through the `partialResults` listener while audio is captured.                                                                          |
-| **`addPunctuation`**  | <code>boolean</code> | Enables native punctuation handling where supported (iOS 16+).                                                                                                              |
-| **`allowForSilence`** | <code>number</code>  | Allow a number of milliseconds of silence before splitting the recognition session into segments. Required to be greater than zero and currently supported on Android only. |
+| Prop                  | Type                 | Description                                                                                                                                                                                                    |
+| --------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`language`**        | <code>string</code>  | Locale identifier such as `en-US`. When omitted the device language is used.                                                                                                                                   |
+| **`maxResults`**      | <code>number</code>  | Maximum number of final matches returned by native APIs. Defaults to `5`.                                                                                                                                      |
+| **`prompt`**          | <code>string</code>  | Prompt message shown inside the Android system dialog (ignored on iOS).                                                                                                                                        |
+| **`popup`**           | <code>boolean</code> | When `true`, Android shows the OS speech dialog instead of running inline recognition. Defaults to `false`.                                                                                                    |
+| **`partialResults`**  | <code>boolean</code> | Emits partial transcription updates through the `partialResults` listener while audio is captured.                                                                                                             |
+| **`addPunctuation`**  | <code>boolean</code> | Enables native punctuation handling where supported (iOS 16+).                                                                                                                                                 |
+| **`allowForSilence`** | <code>number</code>  | Allow a number of milliseconds of silence before splitting the recognition session into segments. Required to be greater than zero and currently supported on Android only.                                    |
+| **`continuousPTT`**   | <code>boolean</code> | EXPERIMENTAL: Enable continuous PTT mode. When enabled and used with setPTTState(), recognition will auto-restart on silence while the PTT button is held, accumulating results across restarts. Android only. |
+
+
+#### ForceStopOptions
+
+Options for the forceStop method.
+
+| Prop          | Type                | Description                                                                           |
+| ------------- | ------------------- | ------------------------------------------------------------------------------------- |
+| **`timeout`** | <code>number</code> | Timeout in milliseconds before forcing stop via destroy/recreate. Defaults to 1500ms. |
+
+
+#### LastPartialResult
+
+Result from getLastPartialResult.
+
+| Prop            | Type                  | Description                            |
+| --------------- | --------------------- | -------------------------------------- |
+| **`available`** | <code>boolean</code>  | Whether a partial result is available. |
+| **`text`**      | <code>string</code>   | The last partial transcription text.   |
+| **`matches`**   | <code>string[]</code> | All partial match alternatives.        |
+
+
+#### PTTStateOptions
+
+Options for setPTTState method.
+
+| Prop       | Type                 | Description                                                                                     |
+| ---------- | -------------------- | ----------------------------------------------------------------------------------------------- |
+| **`held`** | <code>boolean</code> | Whether the PTT button is currently held. Set to true on button press, false on button release. |
 
 
 #### SpeechRecognitionLanguages
@@ -383,7 +475,7 @@ Raised when the listening state changes.
 
 | Prop         | Type                                |
 | ------------ | ----------------------------------- |
-| **`status`** | <code>'started' \| 'stopped'</code> |
+| **`status`** | <code>'stopped' \| 'started'</code> |
 
 
 ### Type Aliases
@@ -391,6 +483,6 @@ Raised when the listening state changes.
 
 #### PermissionState
 
-<code>'prompt' | 'prompt-with-rationale' | 'granted' | 'denied'</code>
+<code>"denied" | "granted" | "prompt"</code>
 
 </docgen-api>

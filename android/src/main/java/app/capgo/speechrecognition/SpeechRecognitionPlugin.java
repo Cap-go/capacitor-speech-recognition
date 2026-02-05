@@ -155,77 +155,79 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         int timeout = call.getInt("timeout", 1500);
         Logger.info(TAG, "forceStop() requested with timeout=" + timeout + "ms");
 
-        bridge.getWebView().post(() -> {
-            try {
-                lock.lock();
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
 
-                if (!listening) {
-                    Logger.debug(TAG, "forceStop() - not listening, resolving immediately");
-                    call.resolve();
-                    return;
-                }
-
-                // Cancel any existing timeout
-                if (forceStopRunnable != null) {
-                    pttHandler.removeCallbacks(forceStopRunnable);
-                }
-
-                // First try graceful stop
-                speechRecognizer.stopListening();
-                Logger.debug(TAG, "forceStop() - called stopListening(), starting timeout");
-
-                // Set timeout for force cancel with destroy/recreate
-                forceStopRunnable = () -> {
-                    try {
-                        lock.lock();
-                        if (listening) {
-                            Logger.debug(TAG, "forceStop() - TIMEOUT! Force stopping with destroy/recreate");
-
-                            // Mark as force-stopped to ignore late callbacks
-                            forceStopped = true;
-
-                            // Get cached partial result before destroying
-                            JSObject result = new JSObject();
-                            result.put("matches", previousPartialResults);
-                            result.put("forced", true);
-
-                            // Destroy and recreate
-                            speechRecognizer.cancel();
-                            speechRecognizer.destroy();
-                            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
-                            SpeechRecognitionListener listener = new SpeechRecognitionListener();
-                            speechRecognizer.setRecognitionListener(listener);
-
-                            // Emit final result with cached partial
-                            notifyListeners(PARTIAL_RESULTS_EVENT, result);
-
-                            // Update state
-                            listening(false);
-                            forceStopped = false;
-
-                            // Emit stopped state
-                            JSObject stateResult = new JSObject();
-                            stateResult.put("status", "stopped");
-                            notifyListeners(LISTENING_EVENT, stateResult);
-
-                            Logger.debug(TAG, "forceStop() - Recognizer destroyed and recreated");
-                        }
-                    } catch (Exception ex) {
-                        Logger.error(TAG, "forceStop() timeout handler error", ex);
-                    } finally {
-                        lock.unlock();
+                    if (!listening) {
+                        Logger.debug(TAG, "forceStop() - not listening, resolving immediately");
+                        call.resolve();
+                        return;
                     }
-                };
-                pttHandler.postDelayed(forceStopRunnable, timeout);
 
-                call.resolve();
-            } catch (Exception ex) {
-                Logger.error(TAG, "forceStop() error", ex);
-                call.reject(ex.getLocalizedMessage());
-            } finally {
-                lock.unlock();
-            }
-        });
+                    // Cancel any existing timeout
+                    if (forceStopRunnable != null) {
+                        pttHandler.removeCallbacks(forceStopRunnable);
+                    }
+
+                    // First try graceful stop
+                    speechRecognizer.stopListening();
+                    Logger.debug(TAG, "forceStop() - called stopListening(), starting timeout");
+
+                    // Set timeout for force cancel with destroy/recreate
+                    forceStopRunnable = () -> {
+                        try {
+                            lock.lock();
+                            if (listening) {
+                                Logger.debug(TAG, "forceStop() - TIMEOUT! Force stopping with destroy/recreate");
+
+                                // Mark as force-stopped to ignore late callbacks
+                                forceStopped = true;
+
+                                // Get cached partial result before destroying
+                                JSObject result = new JSObject();
+                                result.put("matches", previousPartialResults);
+                                result.put("forced", true);
+
+                                // Destroy and recreate
+                                speechRecognizer.cancel();
+                                speechRecognizer.destroy();
+                                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
+                                SpeechRecognitionListener listener = new SpeechRecognitionListener();
+                                speechRecognizer.setRecognitionListener(listener);
+
+                                // Emit final result with cached partial
+                                notifyListeners(PARTIAL_RESULTS_EVENT, result);
+
+                                // Update state
+                                listening(false);
+                                forceStopped = false;
+
+                                // Emit stopped state
+                                JSObject stateResult = new JSObject();
+                                stateResult.put("status", "stopped");
+                                notifyListeners(LISTENING_EVENT, stateResult);
+
+                                Logger.debug(TAG, "forceStop() - Recognizer destroyed and recreated");
+                            }
+                        } catch (Exception ex) {
+                            Logger.error(TAG, "forceStop() timeout handler error", ex);
+                        } finally {
+                            lock.unlock();
+                        }
+                    };
+                    pttHandler.postDelayed(forceStopRunnable, timeout);
+
+                    call.resolve();
+                } catch (Exception ex) {
+                    Logger.error(TAG, "forceStop() error", ex);
+                    call.reject(ex.getLocalizedMessage());
+                } finally {
+                    lock.unlock();
+                }
+            });
     }
 
     /**
@@ -522,8 +524,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             Logger.error(TAG, "Recognizer error: " + errorMssg, null);
 
             // Check if this is a recoverable error in continuous PTT mode
-            boolean isRecoverableError = (error == SpeechRecognizer.ERROR_NO_MATCH ||
-                                          error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT);
+            boolean isRecoverableError = (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT);
 
             if (continuousPTTMode && pttButtonHeld && isRecoverableError) {
                 Logger.debug(TAG, "onError - Recoverable error in continuous PTT mode, restarting");
@@ -546,12 +547,15 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 previousPartialResults = new JSONArray();
 
                 // Small delay then restart
-                pttHandler.postDelayed(() -> {
-                    if (pttButtonHeld && continuousPTTMode) {
-                        Logger.debug(TAG, "Restarting recognition after error (continuous PTT)");
-                        beginListening(lastLanguage, lastMaxResults, lastPrompt, lastPartialResults, false, null, lastAllowForSilence);
-                    }
-                }, 100);
+                pttHandler.postDelayed(
+                    () -> {
+                        if (pttButtonHeld && continuousPTTMode) {
+                            Logger.debug(TAG, "Restarting recognition after error (continuous PTT)");
+                            beginListening(lastLanguage, lastMaxResults, lastPrompt, lastPartialResults, false, null, lastAllowForSilence);
+                        }
+                    },
+                    100
+                );
             } else {
                 // Normal error handling
                 stopListening();
@@ -606,12 +610,23 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                     previousPartialResults = new JSONArray();
 
                     // Small delay then restart
-                    pttHandler.postDelayed(() -> {
-                        if (pttButtonHeld && continuousPTTMode) {
-                            Logger.debug(TAG, "Restarting recognition (continuous PTT)");
-                            beginListening(lastLanguage, lastMaxResults, lastPrompt, lastPartialResults, false, null, lastAllowForSilence);
-                        }
-                    }, 100);
+                    pttHandler.postDelayed(
+                        () -> {
+                            if (pttButtonHeld && continuousPTTMode) {
+                                Logger.debug(TAG, "Restarting recognition (continuous PTT)");
+                                beginListening(
+                                    lastLanguage,
+                                    lastMaxResults,
+                                    lastPrompt,
+                                    lastPartialResults,
+                                    false,
+                                    null,
+                                    lastAllowForSilence
+                                );
+                            }
+                        },
+                        100
+                    );
                 } else {
                     // Normal behavior - emit final result
                     if (call != null) {

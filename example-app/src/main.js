@@ -36,7 +36,7 @@ function appendEvent(label, detail) {
   body.textContent = detail ? `${label}: ${detail}` : label;
   entry.appendChild(time);
   entry.appendChild(body);
-  if (refs.eventLog.firstChild?.classList.contains('muted')) {
+  if (refs.eventLog.firstChild?.classList?.contains('muted')) {
     refs.eventLog.innerHTML = '';
   }
   refs.eventLog.prepend(entry);

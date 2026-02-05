@@ -61,6 +61,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private boolean lastPartialResults;
     private int lastAllowForSilence;
 
+    // Track active start() call for force-stop resolution (when partialResults=false)
+    private PluginCall activeStartCall;
+
     @Override
     public void load() {
         super.load();
@@ -192,6 +195,12 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
                                 // Mark as force-stopped to ignore late callbacks
                                 forceStopped = true;
+
+                                // Reject any pending start() call (when partialResults=false)
+                                if (activeStartCall != null) {
+                                    activeStartCall.reject("forceStop", "Recognition force stopped");
+                                    activeStartCall = null;
+                                }
 
                                 // Get cached partial result before destroying
                                 JSObject result = new JSObject();
@@ -418,6 +427,14 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         speechRecognizer.setRecognitionListener(listener);
                         speechRecognizer.startListening(intent);
                         listening(true);
+
+                        // Track call for force-stop resolution when partialResults=false
+                        if (!partialResults && call != null) {
+                            activeStartCall = call;
+                        } else {
+                            activeStartCall = null;
+                        }
+
                         if (partialResults && call != null) {
                             call.resolve();
                         }
@@ -573,6 +590,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
                 if (call != null) {
                     call.reject(errorMssg);
+                    activeStartCall = null;
                 }
             }
         }
@@ -643,6 +661,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                     if (call != null) {
                         if (!partialResults) {
                             call.resolve(new JSObject().put("status", "success").put("matches", jsArray));
+                            activeStartCall = null;
                         } else {
                             JSObject ret = new JSObject();
                             ret.put("matches", jsArray);
@@ -665,6 +684,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             } catch (Exception ex) {
                 if (call != null) {
                     call.resolve(new JSObject().put("status", "error").put("message", ex.getMessage()));
+                    activeStartCall = null;
                 }
             }
         }

@@ -156,7 +156,9 @@ export interface SpeechRecognitionPlugin {
    * This method:
    * 1. Tries graceful stopListening() first
    * 2. After timeout, forces stop by destroying and recreating the recognizer
-   * 3. Returns the last cached partial result so no speech is lost
+   * 3. Emits the last cached partial result via the `partialResults` event
+   *
+   * To retrieve the last transcription after force stop, use {@link getLastPartialResult}.
    *
    * @param options - Optional timeout configuration
    */

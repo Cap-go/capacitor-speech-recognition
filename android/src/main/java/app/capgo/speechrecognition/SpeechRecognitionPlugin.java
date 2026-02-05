@@ -411,11 +411,15 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         speechRecognizer.setRecognitionListener(listener);
                         speechRecognizer.startListening(intent);
                         listening(true);
-                        if (partialResults) {
+                        if (partialResults && call != null) {
                             call.resolve();
                         }
                     } catch (Exception ex) {
-                        call.reject(ex.getMessage());
+                        if (call != null) {
+                            call.reject(ex.getMessage());
+                        } else {
+                            Logger.error(TAG, "Error during continuousPTT restart", ex);
+                        }
                     } finally {
                         lock.unlock();
                     }

@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -41,6 +43,26 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private final ReentrantLock lock = new ReentrantLock();
     private boolean listening = false;
     private JSONArray previousPartialResults = new JSONArray();
+
+    // PTT (Push-to-Talk) support fields
+    private final Handler pttHandler = new Handler(Looper.getMainLooper());
+    private Runnable forceStopRunnable;
+    private boolean forceStopped = false;
+
+    // Continuous PTT mode fields (experimental)
+    private boolean pttButtonHeld = false;
+    private boolean continuousPTTMode = false;
+    private StringBuilder accumulatedResults = new StringBuilder();
+
+    // Store config for continuous restart
+    private String lastLanguage;
+    private int lastMaxResults;
+    private String lastPrompt;
+    private boolean lastPartialResults;
+    private int lastAllowForSilence;
+
+    // Track active start() call for force-stop resolution (when partialResults=false)
+    private PluginCall activeStartCall;
 
     @Override
     public void load() {
@@ -81,17 +103,36 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         boolean partialResults = call.getBoolean("partialResults", false);
         boolean popup = call.getBoolean("popup", false);
         int allowForSilence = call.getInt("allowForSilence", 0);
+        boolean continuousPTT = call.getBoolean("continuousPTT", false);
+
         Logger.info(
             TAG,
             String.format(
-                "Starting recognition | lang=%s maxResults=%d partial=%s popup=%s allowForSilence=%d",
+                "Starting recognition | lang=%s maxResults=%d partial=%s popup=%s allowForSilence=%d continuousPTT=%s",
                 language,
                 maxResults,
                 partialResults,
                 popup,
-                allowForSilence
+                allowForSilence,
+                continuousPTT
             )
         );
+
+        // Cancel any pending force-stop timeout from a previous session
+        if (forceStopRunnable != null) {
+            pttHandler.removeCallbacks(forceStopRunnable);
+            forceStopRunnable = null;
+        }
+        forceStopped = false;
+
+        // Store config for potential restarts in continuous PTT mode
+        this.continuousPTTMode = continuousPTT;
+        this.lastLanguage = language;
+        this.lastMaxResults = maxResults;
+        this.lastPrompt = prompt;
+        this.lastPartialResults = partialResults;
+        this.lastAllowForSilence = allowForSilence;
+
         beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence);
     }
 
@@ -105,6 +146,160 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
         call.resolve();
+    }
+
+    /**
+     * Force stop recognition with timeout fallback.
+     * This implements the destroy/recreate pattern for reliable PTT.
+     *
+     * The Android SpeechRecognizer.stopListening() method doesn't reliably stop
+     * audio input in all scenarios. This method provides a fallback that:
+     * 1. Tries graceful stopListening() first
+     * 2. After a timeout, forces stop by destroying and recreating the recognizer
+     * 3. Returns the last cached partial result so no speech is lost
+     *
+     * @param call Plugin call with optional timeout parameter (default 1500ms)
+     */
+    @PluginMethod
+    public void forceStop(final PluginCall call) {
+        int timeout = call.getInt("timeout", 1500);
+        Logger.info(TAG, "forceStop() requested with timeout=" + timeout + "ms");
+
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
+
+                    if (!listening) {
+                        Logger.debug(TAG, "forceStop() - not listening, resolving immediately");
+                        call.resolve();
+                        return;
+                    }
+
+                    // Cancel any existing timeout
+                    if (forceStopRunnable != null) {
+                        pttHandler.removeCallbacks(forceStopRunnable);
+                    }
+
+                    // First try graceful stop
+                    speechRecognizer.stopListening();
+                    Logger.debug(TAG, "forceStop() - called stopListening(), starting timeout");
+
+                    // Set timeout for force cancel with destroy/recreate
+                    forceStopRunnable = () -> {
+                        try {
+                            lock.lock();
+                            if (listening) {
+                                Logger.debug(TAG, "forceStop() - TIMEOUT! Force stopping with destroy/recreate");
+
+                                // Mark as force-stopped to ignore late callbacks
+                                forceStopped = true;
+
+                                // Reject any pending start() call (when partialResults=false)
+                                if (activeStartCall != null) {
+                                    activeStartCall.reject("forceStop", "Recognition force stopped");
+                                    activeStartCall = null;
+                                }
+
+                                // Get cached partial result before destroying
+                                JSObject result = new JSObject();
+                                result.put("matches", previousPartialResults);
+                                result.put("forced", true);
+
+                                // Destroy and recreate
+                                speechRecognizer.cancel();
+                                speechRecognizer.destroy();
+                                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
+                                SpeechRecognitionListener listener = new SpeechRecognitionListener();
+                                speechRecognizer.setRecognitionListener(listener);
+
+                                // Emit final result with cached partial
+                                notifyListeners(PARTIAL_RESULTS_EVENT, result);
+
+                                // Update state
+                                listening(false);
+                                forceStopped = false;
+
+                                // Emit stopped state
+                                JSObject stateResult = new JSObject();
+                                stateResult.put("status", "stopped");
+                                notifyListeners(LISTENING_EVENT, stateResult);
+
+                                Logger.debug(TAG, "forceStop() - Recognizer destroyed and recreated");
+                            }
+                        } catch (Exception ex) {
+                            Logger.error(TAG, "forceStop() timeout handler error", ex);
+                        } finally {
+                            lock.unlock();
+                        }
+                    };
+                    pttHandler.postDelayed(forceStopRunnable, timeout);
+
+                    call.resolve();
+                } catch (Exception ex) {
+                    Logger.error(TAG, "forceStop() error", ex);
+                    call.reject(ex.getLocalizedMessage());
+                } finally {
+                    lock.unlock();
+                }
+            });
+    }
+
+    /**
+     * Get the last cached partial result.
+     * Useful for retrieving what was heard before a force stop.
+     *
+     * @param call Plugin call
+     */
+    @PluginMethod
+    public void getLastPartialResult(final PluginCall call) {
+        try {
+            lock.lock();
+            JSObject result = new JSObject();
+
+            if (previousPartialResults != null && previousPartialResults.length() > 0) {
+                result.put("text", previousPartialResults.getString(0));
+                result.put("matches", previousPartialResults);
+                result.put("available", true);
+            } else {
+                result.put("available", false);
+                result.put("text", "");
+            }
+
+            call.resolve(result);
+        } catch (Exception ex) {
+            call.reject(ex.getLocalizedMessage());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Set PTT button state for continuous PTT mode.
+     * When held=true and continuousPTT is enabled, recognition will auto-restart on silence.
+     *
+     * @param call Plugin call with 'held' boolean parameter
+     */
+    @PluginMethod
+    public void setPTTState(final PluginCall call) {
+        boolean held = call.getBoolean("held", false);
+        Logger.debug(TAG, "setPTTState() held=" + held);
+
+        try {
+            lock.lock();
+            this.pttButtonHeld = held;
+
+            if (held) {
+                // Button pressed - reset accumulated results
+                accumulatedResults = new StringBuilder();
+                forceStopped = false;
+            }
+
+            call.resolve();
+        } finally {
+            lock.unlock();
+        }
     }
 
     @PluginMethod
@@ -232,11 +427,23 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         speechRecognizer.setRecognitionListener(listener);
                         speechRecognizer.startListening(intent);
                         listening(true);
-                        if (partialResults) {
+
+                        // Track call for force-stop resolution when partialResults=false
+                        if (!partialResults && call != null) {
+                            activeStartCall = call;
+                        } else {
+                            activeStartCall = null;
+                        }
+
+                        if (partialResults && call != null) {
                             call.resolve();
                         }
                     } catch (Exception ex) {
-                        call.reject(ex.getMessage());
+                        if (call != null) {
+                            call.reject(ex.getMessage());
+                        } else {
+                            Logger.error(TAG, "Error during continuousPTT restart", ex);
+                        }
                     } finally {
                         lock.unlock();
                     }
@@ -335,41 +542,160 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onError(int error) {
-            stopListening();
+            // Ignore if we force-stopped
+            if (forceStopped) {
+                Logger.debug(TAG, "onError - ignoring (force-stopped): " + error);
+                return;
+            }
+
             String errorMssg = getErrorText(error);
             Logger.error(TAG, "Recognizer error: " + errorMssg, null);
 
-            if (call != null) {
-                call.reject(errorMssg);
+            // Check if this is a recoverable error in continuous PTT mode
+            boolean isRecoverableError = (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT);
+
+            if (continuousPTTMode && pttButtonHeld && isRecoverableError) {
+                Logger.debug(TAG, "onError - Recoverable error in continuous PTT mode, restarting");
+
+                // Accumulate any cached partial result
+                if (previousPartialResults != null && previousPartialResults.length() > 0) {
+                    try {
+                        String lastPartial = previousPartialResults.getString(0);
+                        if (!lastPartial.isEmpty()) {
+                            if (accumulatedResults.length() > 0) {
+                                accumulatedResults.append(" ");
+                            }
+                            accumulatedResults.append(lastPartial);
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                // Reset state for restart
+                listening(false);
+                previousPartialResults = new JSONArray();
+
+                // Small delay then restart
+                pttHandler.postDelayed(
+                    () -> {
+                        if (pttButtonHeld && continuousPTTMode) {
+                            Logger.debug(TAG, "Restarting recognition after error (continuous PTT)");
+                            beginListening(lastLanguage, lastMaxResults, lastPrompt, lastPartialResults, false, null, lastAllowForSilence);
+                        }
+                    },
+                    100
+                );
+            } else {
+                // Normal error handling
+                stopListening();
+
+                if (call != null) {
+                    call.reject(errorMssg);
+                    activeStartCall = null;
+                }
             }
         }
 
         @Override
         public void onResults(Bundle results) {
+            // Ignore if we force-stopped
+            if (forceStopped) {
+                Logger.debug(TAG, "onResults - ignoring (force-stopped)");
+                return;
+            }
+
+            // Cancel any pending force-stop timeout since we got results normally
+            if (forceStopRunnable != null) {
+                pttHandler.removeCallbacks(forceStopRunnable);
+            }
+
             ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            String resultText = (matches != null && !matches.isEmpty()) ? matches.get(0) : "";
 
             try {
                 JSArray jsArray = new JSArray(matches);
                 Logger.debug(TAG, "Received final results count=" + (matches == null ? 0 : matches.size()));
 
-                if (call != null) {
-                    if (!partialResults) {
-                        call.resolve(new JSObject().put("status", "success").put("matches", jsArray));
-                    } else {
-                        JSObject ret = new JSObject();
-                        ret.put("matches", jsArray);
-                        notifyListeners(PARTIAL_RESULTS_EVENT, ret);
+                // Check if we should restart in continuous PTT mode
+                if (continuousPTTMode && pttButtonHeld) {
+                    Logger.debug(TAG, "onResults - Continuous PTT mode, button still held - accumulating and restarting");
+
+                    // Accumulate the result
+                    if (!resultText.isEmpty()) {
+                        if (accumulatedResults.length() > 0) {
+                            accumulatedResults.append(" ");
+                        }
+                        accumulatedResults.append(resultText);
                     }
+
+                    // Emit accumulated so far
+                    JSObject ret = new JSObject();
+                    ret.put("matches", jsArray);
+                    ret.put("accumulated", accumulatedResults.toString().trim());
+                    ret.put("isRestarting", true);
+                    notifyListeners(PARTIAL_RESULTS_EVENT, ret);
+
+                    // Reset state for restart
+                    listening(false);
+                    previousPartialResults = new JSONArray();
+
+                    // Small delay then restart
+                    pttHandler.postDelayed(
+                        () -> {
+                            if (pttButtonHeld && continuousPTTMode) {
+                                Logger.debug(TAG, "Restarting recognition (continuous PTT)");
+                                beginListening(
+                                    lastLanguage,
+                                    lastMaxResults,
+                                    lastPrompt,
+                                    lastPartialResults,
+                                    false,
+                                    null,
+                                    lastAllowForSilence
+                                );
+                            }
+                        },
+                        100
+                    );
+                } else {
+                    // Normal behavior - emit final result
+                    if (call != null) {
+                        if (!partialResults) {
+                            call.resolve(new JSObject().put("status", "success").put("matches", jsArray));
+                            activeStartCall = null;
+                        } else {
+                            JSObject ret = new JSObject();
+                            ret.put("matches", jsArray);
+
+                            // Include accumulated if we were in continuous mode
+                            if (accumulatedResults.length() > 0) {
+                                String finalText = accumulatedResults.toString().trim();
+                                if (!resultText.isEmpty()) {
+                                    finalText = finalText + " " + resultText;
+                                }
+                                ret.put("accumulatedText", finalText);
+                            }
+
+                            notifyListeners(PARTIAL_RESULTS_EVENT, ret);
+                        }
+                    }
+
+                    listening(false);
                 }
             } catch (Exception ex) {
                 if (call != null) {
                     call.resolve(new JSObject().put("status", "error").put("message", ex.getMessage()));
+                    activeStartCall = null;
                 }
             }
         }
 
         @Override
         public void onPartialResults(Bundle partialResultsBundle) {
+            // Ignore if we force-stopped
+            if (forceStopped) {
+                return;
+            }
+
             ArrayList<String> matches = partialResultsBundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             JSArray matchesJSON = new JSArray(matches);
 

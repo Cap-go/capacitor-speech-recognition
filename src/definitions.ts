@@ -44,6 +44,13 @@ export interface SpeechRecognitionStartOptions {
    * Required to be greater than zero and currently supported on Android only.
    */
   allowForSilence?: number;
+  /**
+   * EXPERIMENTAL: Enable continuous PTT mode.
+   * When enabled and used with setPTTState(), recognition will auto-restart on silence
+   * while the PTT button is held, accumulating results across restarts.
+   * Android only.
+   */
+  continuousPTT?: boolean;
 }
 
 /**
@@ -51,6 +58,22 @@ export interface SpeechRecognitionStartOptions {
  */
 export interface SpeechRecognitionPartialResultEvent {
   matches: string[];
+  /**
+   * Accumulated transcription across continuous PTT restarts (Android only).
+   */
+  accumulated?: string;
+  /**
+   * Final accumulated text including the current result (Android only).
+   */
+  accumulatedText?: string;
+  /**
+   * True when recognition is restarting in continuous PTT mode (Android only).
+   */
+  isRestarting?: boolean;
+  /**
+   * True when result was emitted due to force stop timeout (Android only).
+   */
+  forced?: boolean;
 }
 
 /**
@@ -83,6 +106,46 @@ export interface SpeechRecognitionListening {
   listening: boolean;
 }
 
+/**
+ * Options for the forceStop method.
+ */
+export interface ForceStopOptions {
+  /**
+   * Timeout in milliseconds before forcing stop via destroy/recreate.
+   * Defaults to 1500ms.
+   */
+  timeout?: number;
+}
+
+/**
+ * Result from getLastPartialResult.
+ */
+export interface LastPartialResult {
+  /**
+   * Whether a partial result is available.
+   */
+  available: boolean;
+  /**
+   * The last partial transcription text.
+   */
+  text: string;
+  /**
+   * All partial match alternatives.
+   */
+  matches?: string[];
+}
+
+/**
+ * Options for setPTTState method.
+ */
+export interface PTTStateOptions {
+  /**
+   * Whether the PTT button is currently held.
+   * Set to true on button press, false on button release.
+   */
+  held: boolean;
+}
+
 export interface SpeechRecognitionPlugin {
   /**
    * Checks whether the native speech recognition service is usable on the current device.
@@ -99,6 +162,44 @@ export interface SpeechRecognitionPlugin {
    * Stops listening and tears down native resources.
    */
   stop(): Promise<void>;
+  /**
+   * Force stops recognition with a timeout fallback.
+   *
+   * This is useful for Push-to-Talk (PTT) implementations where you need
+   * reliable stopping behavior. The Android SpeechRecognizer.stopListening()
+   * doesn't always stop audio capture reliably.
+   *
+   * This method:
+   * 1. Tries graceful stopListening() first
+   * 2. After timeout, forces stop by destroying and recreating the recognizer
+   * 3. Emits the last cached partial result via the `partialResults` event
+   *
+   * To retrieve the last transcription after force stop, use {@link getLastPartialResult}.
+   *
+   * @platform Android
+   * @param options - Optional timeout configuration
+   */
+  forceStop(options?: ForceStopOptions): Promise<void>;
+  /**
+   * Gets the last cached partial transcription result.
+   *
+   * Useful for retrieving what was heard before a force stop,
+   * or checking the current partial state at any time.
+   *
+   * @platform Android
+   */
+  getLastPartialResult(): Promise<LastPartialResult>;
+  /**
+   * EXPERIMENTAL: Set PTT button state for continuous PTT mode.
+   *
+   * When continuousPTT is enabled in start() and held is true,
+   * recognition will auto-restart on silence, accumulating results.
+   * Call with held=false when the button is released.
+   *
+   * @platform Android
+   * @param options - PTT state options
+   */
+  setPTTState(options: PTTStateOptions): Promise<void>;
   /**
    * Gets the locales supported by the underlying recognizer.
    *

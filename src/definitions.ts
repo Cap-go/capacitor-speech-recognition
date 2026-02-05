@@ -176,6 +176,7 @@ export interface SpeechRecognitionPlugin {
    *
    * To retrieve the last transcription after force stop, use {@link getLastPartialResult}.
    *
+   * @platform Android
    * @param options - Optional timeout configuration
    */
   forceStop(options?: ForceStopOptions): Promise<void>;
@@ -184,6 +185,8 @@ export interface SpeechRecognitionPlugin {
    *
    * Useful for retrieving what was heard before a force stop,
    * or checking the current partial state at any time.
+   *
+   * @platform Android
    */
   getLastPartialResult(): Promise<LastPartialResult>;
   /**
@@ -193,6 +196,7 @@ export interface SpeechRecognitionPlugin {
    * recognition will auto-restart on silence, accumulating results.
    * Call with held=false when the button is released.
    *
+   * @platform Android
    * @param options - PTT state options
    */
   setPTTState(options: PTTStateOptions): Promise<void>;

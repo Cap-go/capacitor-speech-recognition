@@ -58,6 +58,22 @@ export interface SpeechRecognitionStartOptions {
  */
 export interface SpeechRecognitionPartialResultEvent {
   matches: string[];
+  /**
+   * Accumulated transcription across continuous PTT restarts (Android only).
+   */
+  accumulated?: string;
+  /**
+   * Final accumulated text including the current result (Android only).
+   */
+  accumulatedText?: string;
+  /**
+   * True when recognition is restarting in continuous PTT mode (Android only).
+   */
+  isRestarting?: boolean;
+  /**
+   * True when result was emitted due to force stop timeout (Android only).
+   */
+  forced?: boolean;
 }
 
 /**

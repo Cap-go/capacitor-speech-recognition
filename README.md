@@ -466,9 +466,13 @@ Raised whenever a segmented result is produced (Android only).
 
 Raised whenever a partial transcription is produced.
 
-| Prop          | Type                  |
-| ------------- | --------------------- |
-| **`matches`** | <code>string[]</code> |
+| Prop                  | Type                  | Description                                                                |
+| --------------------- | --------------------- | -------------------------------------------------------------------------- |
+| **`matches`**         | <code>string[]</code> |                                                                            |
+| **`accumulated`**     | <code>string</code>   | Accumulated transcription across continuous PTT restarts (Android only).   |
+| **`accumulatedText`** | <code>string</code>   | Final accumulated text including the current result (Android only).        |
+| **`isRestarting`**    | <code>boolean</code>  | True when recognition is restarting in continuous PTT mode (Android only). |
+| **`forced`**          | <code>boolean</code>  | True when result was emitted due to force stop timeout (Android only).     |
 
 
 #### SpeechRecognitionListeningEvent

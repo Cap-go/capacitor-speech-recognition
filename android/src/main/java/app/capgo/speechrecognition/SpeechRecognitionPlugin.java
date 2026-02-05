@@ -115,6 +115,13 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             )
         );
 
+        // Cancel any pending force-stop timeout from a previous session
+        if (forceStopRunnable != null) {
+            pttHandler.removeCallbacks(forceStopRunnable);
+            forceStopRunnable = null;
+        }
+        forceStopped = false;
+
         // Store config for potential restarts in continuous PTT mode
         this.continuousPTTMode = continuousPTT;
         this.lastLanguage = language;

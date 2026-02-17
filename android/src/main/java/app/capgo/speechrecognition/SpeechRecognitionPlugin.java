@@ -346,7 +346,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onResults(Bundle results) {
-            ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            ArrayList<String> matches = buildMatchesWithUnstableText(results);
 
             try {
                 JSArray jsArray = new JSArray(matches);
@@ -370,7 +370,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onPartialResults(Bundle partialResultsBundle) {
-            ArrayList<String> matches = partialResultsBundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            ArrayList<String> matches = buildMatchesWithUnstableText(partialResultsBundle);
             JSArray matchesJSON = new JSArray(matches);
 
             try {
@@ -382,6 +382,22 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                     Logger.debug(TAG, "Partial results updated");
                 }
             } catch (Exception ex) {}
+        }
+
+        private ArrayList<String> buildMatchesWithUnstableText(Bundle resultsBundle) {
+            ArrayList<String> matches = resultsBundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            if (matches == null || matches.size() == 0) {
+                return matches;
+            }
+
+            String unstableText = resultsBundle.getString("android.speech.extra.UNSTABLE_TEXT");
+            if (unstableText != null && !unstableText.trim().isEmpty()) {
+                ArrayList<String> mergedMatches = new ArrayList<>(matches);
+                mergedMatches.set(0, mergedMatches.get(0) + " " + unstableText.trim());
+                return mergedMatches;
+            }
+
+            return matches;
         }
 
         @Override

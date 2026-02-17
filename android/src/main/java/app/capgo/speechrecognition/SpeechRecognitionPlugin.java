@@ -386,14 +386,29 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         private ArrayList<String> buildMatchesWithUnstableText(Bundle resultsBundle) {
             ArrayList<String> matches = resultsBundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-            if (matches == null || matches.size() == 0) {
+            if (matches == null || matches.isEmpty()) {
                 return matches;
             }
 
             String unstableText = resultsBundle.getString("android.speech.extra.UNSTABLE_TEXT");
-            if (unstableText != null && !unstableText.trim().isEmpty()) {
+            if (unstableText != null) {
+                String trimmedUnstable = unstableText.trim();
+                if (trimmedUnstable.isEmpty()) {
+                    return matches;
+                }
+
+                String firstMatch = matches.get(0);
+                if (firstMatch == null) {
+                    return matches;
+                }
+
+                String trimmedFirstMatch = firstMatch.trim();
+                if (trimmedFirstMatch.equals(trimmedUnstable) || trimmedFirstMatch.endsWith(trimmedUnstable)) {
+                    return matches;
+                }
+
                 ArrayList<String> mergedMatches = new ArrayList<>(matches);
-                mergedMatches.set(0, mergedMatches.get(0) + " " + unstableText.trim());
+                mergedMatches.set(0, firstMatch + " " + trimmedUnstable);
                 return mergedMatches;
             }
 

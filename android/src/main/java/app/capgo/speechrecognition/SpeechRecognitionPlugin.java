@@ -371,17 +371,22 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         @Override
         public void onPartialResults(Bundle partialResultsBundle) {
             ArrayList<String> matches = buildMatchesWithUnstableText(partialResultsBundle);
-            JSArray matchesJSON = new JSArray(matches);
+            if (matches == null || matches.isEmpty()) {
+                return;
+            }
 
             try {
-                if (matches != null && matches.size() > 0 && !previousPartialResults.equals(matchesJSON)) {
+                JSArray matchesJSON = new JSArray(matches);
+                if (!previousPartialResults.equals(matchesJSON)) {
                     previousPartialResults = matchesJSON;
                     JSObject ret = new JSObject();
                     ret.put("matches", previousPartialResults);
                     notifyListeners(PARTIAL_RESULTS_EVENT, ret);
                     Logger.debug(TAG, "Partial results updated");
                 }
-            } catch (Exception ex) {}
+            } catch (Exception ex) {
+                Logger.error(TAG, "onPartialResults failed", ex);
+            }
         }
 
         private ArrayList<String> buildMatchesWithUnstableText(Bundle resultsBundle) {
@@ -403,12 +408,12 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 }
 
                 String trimmedFirstMatch = firstMatch.trim();
-                if (trimmedFirstMatch.equals(trimmedUnstable) || trimmedFirstMatch.endsWith(trimmedUnstable)) {
+                if (trimmedFirstMatch.equals(trimmedUnstable) || trimmedFirstMatch.endsWith(" " + trimmedUnstable)) {
                     return matches;
                 }
 
                 ArrayList<String> mergedMatches = new ArrayList<>(matches);
-                mergedMatches.set(0, firstMatch + " " + trimmedUnstable);
+                mergedMatches.set(0, trimmedFirstMatch + " " + trimmedUnstable);
                 return mergedMatches;
             }
 

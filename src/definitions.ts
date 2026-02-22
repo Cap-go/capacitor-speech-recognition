@@ -61,10 +61,109 @@ export interface SpeechRecognitionSegmentResultEvent {
 }
 
 /**
+ * Finite state values for the speech recognition session lifecycle.
+ */
+export type ListeningFiniteState =
+  | 'startingListening'
+  | 'started'
+  | 'stoppingListening'
+  | 'stopped';
+
+/**
+ * Reason codes explaining why a state transition occurred.
+ */
+export type ListeningReason =
+  | 'userStart'
+  | 'userStop'
+  | 'results'
+  | 'silence'
+  | 'error'
+  | 'unknown';
+
+/**
  * Raised when the listening state changes.
+ * 
+ * **Extended in v7.1+** with state machine tracking.
+ * The `status` field is kept for backward compatibility.
  */
 export interface SpeechRecognitionListeningEvent {
+  /**
+   * Finite state of the recognition session.
+   * @since 7.1.0
+   */
+  state?: ListeningFiniteState;
+  
+  /**
+   * Unique identifier for this listening session.
+   * Increments on each `start()` call.
+   * @since 7.1.0
+   */
+  sessionId?: number;
+  
+  /**
+   * Why this state transition occurred.
+   * @since 7.1.0
+   */
+  reason?: ListeningReason;
+  
+  /**
+   * Error code if the transition was due to an error.
+   * @since 7.1.0
+   */
+  errorCode?: string;
+  
+  /**
+   * Simplified binary status for backward compatibility.
+   * - Maps to `'started'` when `state === 'started'`
+   * - Maps to `'stopped'` when `state === 'stopped'`
+   */
   status: 'started' | 'stopped';
+}
+
+/**
+ * Raised when a recognition error occurs.
+ * 
+ * Previously errors were only reported through promise rejections.
+ * Now all errors emit this event.
+ * 
+ * @since 7.1.0
+ */
+export interface SpeechRecognitionErrorEvent {
+  /**
+   * Machine-readable error code such as:
+   * - `NO_MATCH` - No speech detected (silence timeout)
+   * - `SPEECH_TIMEOUT` - Speech input timeout
+   * - `NETWORK` - Network error
+   * - `AUDIO` - Audio recording error
+   * - `CLIENT` - Client-side error
+   * - etc.
+   */
+  code: string;
+  
+  /**
+   * Human-readable error message.
+   */
+  message: string;
+  
+  /**
+   * Session ID that encountered this error.
+   */
+  sessionId: number;
+}
+
+/**
+ * Emitted after the plugin fully tears down and recreates the native recognizer.
+ * 
+ * This is a low-level signal indicating it's safe to call `start()` again
+ * after an error or session completion.
+ * 
+ * @since 7.1.0
+ */
+export interface SpeechRecognitionReadyEvent {
+  /**
+   * The session that was just finished.
+   */
+  sessionId: number;
 }
 
 export interface SpeechRecognitionAvailability {
@@ -147,6 +246,31 @@ export interface SpeechRecognitionPlugin {
   addListener(
     eventName: 'listeningState',
     listenerFunc: (event: SpeechRecognitionListeningEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Listen for recognition errors.
+   * 
+   * All errors now emit this event in addition to rejecting promises.
+   * Particularly useful for detecting silence timeouts and other non-critical errors.
+   * 
+   * @since 7.1.0
+   */
+  addListener(
+    eventName: 'error',
+    listenerFunc: (event: SpeechRecognitionErrorEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Listen for the recognizer becoming ready after a session ends.
+   * 
+   * This is a low-level event indicating when the native SpeechRecognizer
+   * has been fully torn down and recreated. Useful for debugging or
+   * implementing retry logic.
+   * 
+   * @since 7.1.0
+   */
+  addListener(
+    eventName: 'readyForNextSession',
+    listenerFunc: (event: SpeechRecognitionReadyEvent) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * Removes every registered listener.

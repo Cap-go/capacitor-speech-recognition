@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -36,11 +38,24 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private static final String TAG = "SpeechRecognition";
     private static final String PLUGIN_VERSION = "7.0.0";
 
+    // State machine
+    private enum ListeningState {
+        IDLE,
+        STARTING,
+        STARTED,
+        STOPPING
+    }
+
     private Receiver languageReceiver;
     private SpeechRecognizer speechRecognizer;
     private final ReentrantLock lock = new ReentrantLock();
     private boolean listening = false;
     private JSONArray previousPartialResults = new JSONArray();
+    
+    // State machine tracking
+    private ListeningState state = ListeningState.IDLE;
+    private long sessionId = 0;
+    private boolean readyForNext = true;
 
     @Override
     public void load() {
@@ -75,36 +90,75 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        String language = call.getString("language", Locale.getDefault().toString());
-        int maxResults = call.getInt("maxResults", MAX_RESULTS);
-        String prompt = call.getString("prompt", null);
-        boolean partialResults = call.getBoolean("partialResults", false);
-        boolean popup = call.getBoolean("popup", false);
-        int allowForSilence = call.getInt("allowForSilence", 0);
-        Logger.info(
-            TAG,
-            String.format(
-                "Starting recognition | lang=%s maxResults=%d partial=%s popup=%s allowForSilence=%d",
-                language,
-                maxResults,
-                partialResults,
-                popup,
-                allowForSilence
-            )
-        );
-        beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence);
+        lock.lock();
+        try {
+            // Increment session ID and set state to STARTING
+            sessionId++;
+            state = ListeningState.STARTING;
+            long currentSessionId = sessionId;
+
+            // Immediately emit startingListening event
+            JSObject startingPayload = new JSObject();
+            startingPayload.put("state", "startingListening");
+            startingPayload.put("sessionId", currentSessionId);
+            startingPayload.put("reason", "userStart");
+            notifyListeners(LISTENING_EVENT, startingPayload);
+
+            String language = call.getString("language", Locale.getDefault().toString());
+            int maxResults = call.getInt("maxResults", MAX_RESULTS);
+            String prompt = call.getString("prompt", null);
+            boolean partialResults = call.getBoolean("partialResults", false);
+            boolean popup = call.getBoolean("popup", false);
+            int allowForSilence = call.getInt("allowForSilence", 0);
+            
+            Logger.info(
+                TAG,
+                String.format(
+                    "Starting recognition | sessionId=%d lang=%s maxResults=%d partial=%s popup=%s allowForSilence=%d",
+                    currentSessionId,
+                    language,
+                    maxResults,
+                    partialResults,
+                    popup,
+                    allowForSilence
+                )
+            );
+            
+            beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence, currentSessionId);
+        } finally {
+            lock.unlock();
+        }
     }
 
     @PluginMethod
     public void stop(final PluginCall call) {
         Logger.info(TAG, "stop() requested");
+        
+        lock.lock();
         try {
+            if (state == ListeningState.IDLE) {
+                Logger.debug(TAG, "stop() called but already IDLE");
+                call.resolve();
+                return;
+            }
+
+            state = ListeningState.STOPPING;
+            long currentSessionId = sessionId;
+            
+            // Emit stoppingListening event
+            JSObject stoppingPayload = new JSObject();
+            stoppingPayload.put("state", "stoppingListening");
+            stoppingPayload.put("sessionId", currentSessionId);
+            stoppingPayload.put("reason", "userStop");
+            notifyListeners(LISTENING_EVENT, stoppingPayload);
+            
             stopListening();
+            call.resolve();
         } catch (Exception ex) {
             call.reject(ex.getLocalizedMessage());
-            return;
+        } finally {
+            lock.unlock();
         }
-        call.resolve();
     }
 
     @PluginMethod
@@ -190,7 +244,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         final boolean partialResults,
         boolean showPopup,
         PluginCall call,
-        int allowForSilence
+        int allowForSilence,
+        long currentSessionId
     ) {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
@@ -226,16 +281,36 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         }
 
                         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
-                        SpeechRecognitionListener listener = new SpeechRecognitionListener();
+                        SpeechRecognitionListener listener = new SpeechRecognitionListener(currentSessionId);
                         listener.setCall(call);
                         listener.setPartialResults(partialResults);
                         speechRecognizer.setRecognitionListener(listener);
                         speechRecognizer.startListening(intent);
                         listening(true);
+                        
+                        // Immediately emit 'started' event after startListening succeeds
+                        // This guarantees the UI gets a started signal even during silence
+                        state = ListeningState.STARTED;
+                        JSObject startedPayload = new JSObject();
+                        startedPayload.put("state", "started");
+                        startedPayload.put("sessionId", currentSessionId);
+                        startedPayload.put("reason", "userStart");
+                        startedPayload.put("status", "started"); // backward compatibility
+                        notifyListeners(LISTENING_EVENT, startedPayload);
+                        Logger.debug(TAG, "Emitted 'started' state for sessionId=" + currentSessionId);
+                        
                         if (partialResults) {
                             call.resolve();
                         }
                     } catch (Exception ex) {
+                        // Emit error and finish session on failure
+                        JSObject errorPayload = new JSObject();
+                        errorPayload.put("code", "START_FAILED");
+                        errorPayload.put("message", ex.getMessage());
+                        errorPayload.put("sessionId", currentSessionId);
+                        notifyListeners(ERROR_EVENT, errorPayload);
+                        
+                        finishSession(currentSessionId, "error", "START_FAILED");
                         call.reject(ex.getMessage());
                     } finally {
                         lock.unlock();
@@ -280,10 +355,122 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
     }
 
+    private void finishSession(long finishedSessionId, String reason, String errorCode) {
+        lock.lock();
+        try {
+            if (finishedSessionId != sessionId) {
+                Logger.debug(TAG, "Ignoring stale session finishSession call: " + finishedSessionId + " (current=" + sessionId + ")");
+                return;
+            }
+
+            Logger.info(TAG, "Finishing session " + finishedSessionId + " reason=" + reason + " errorCode=" + errorCode);
+
+            // Transition to STOPPING state and emit stoppingListening event
+            if (state != ListeningState.STOPPING) {
+                state = ListeningState.STOPPING;
+                
+                JSObject stoppingPayload = new JSObject();
+                stoppingPayload.put("state", "stoppingListening");
+                stoppingPayload.put("sessionId", finishedSessionId);
+                stoppingPayload.put("reason", reason);
+                if (errorCode != null) {
+                    stoppingPayload.put("errorCode", errorCode);
+                }
+                notifyListeners(LISTENING_EVENT, stoppingPayload);
+                Logger.debug(TAG, "Emitted 'stoppingListening' state for sessionId=" + finishedSessionId);
+            }
+
+            // Tear down the current recognizer
+            if (speechRecognizer != null) {
+                try {
+                    speechRecognizer.cancel();
+                    speechRecognizer.destroy();
+                } catch (Exception ignored) {}
+                speechRecognizer = null;
+            }
+
+            state = ListeningState.IDLE;
+            listening(false);
+            readyForNext = false;
+        } finally {
+            lock.unlock();
+        }
+
+        // Recreate recognizer on main thread
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
+                SpeechRecognitionListener dummyListener = new SpeechRecognitionListener(sessionId);
+                speechRecognizer.setRecognitionListener(dummyListener);
+                
+                lock.lock();
+                try {
+                    readyForNext = true;
+                } finally {
+                    lock.unlock();
+                }
+
+                JSObject readyPayload = new JSObject();
+                readyPayload.put("sessionId", finishedSessionId);
+                notifyListeners(READY_FOR_NEXT_SESSION_EVENT, readyPayload);
+                Logger.debug(TAG, "Recognizer recreated, ready for next session");
+            } catch (Exception e) {
+                Logger.error(TAG, "Failed to recreate recognizer", e);
+                JSObject err = new JSObject();
+                err.put("code", "RECREATE_FAILED");
+                err.put("message", e.getMessage());
+                err.put("sessionId", finishedSessionId);
+                notifyListeners(ERROR_EVENT, err);
+            }
+
+            // Emit final 'stopped' state after teardown+recreate
+            JSObject stoppedPayload = new JSObject();
+            stoppedPayload.put("state", "stopped");
+            stoppedPayload.put("sessionId", finishedSessionId);
+            stoppedPayload.put("reason", reason);
+            if (errorCode != null) {
+                stoppedPayload.put("errorCode", errorCode);
+            }
+            stoppedPayload.put("status", "stopped"); // backward compatibility
+            notifyListeners(LISTENING_EVENT, stoppedPayload);
+            Logger.debug(TAG, "Emitted 'stopped' state for sessionId=" + finishedSessionId);
+        });
+    }
+
+    private String getErrorCode(int errorCode) {
+        switch (errorCode) {
+            case SpeechRecognizer.ERROR_AUDIO:
+                return "AUDIO";
+            case SpeechRecognizer.ERROR_CLIENT:
+                return "CLIENT";
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+                return "INSUFFICIENT_PERMISSIONS";
+            case SpeechRecognizer.ERROR_NETWORK:
+                return "NETWORK";
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+                return "NETWORK_TIMEOUT";
+            case SpeechRecognizer.ERROR_NO_MATCH:
+                return "NO_MATCH";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
+                return "RECOGNIZER_BUSY";
+            case SpeechRecognizer.ERROR_SERVER:
+                return "SERVER";
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
+                return "SPEECH_TIMEOUT";
+            default:
+                return "UNKNOWN_" + errorCode;
+        }
+    }
+
     private class SpeechRecognitionListener implements RecognitionListener {
 
+        private final long listenerSessionId;
         private PluginCall call;
         private boolean partialResults;
+
+        public SpeechRecognitionListener(long sessionId) {
+            this.listenerSessionId = sessionId;
+        }
 
         public void setCall(PluginCall call) {
             this.call = call;
@@ -298,15 +485,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onBeginningOfSpeech() {
-            try {
-                lock.lock();
-                JSObject ret = new JSObject();
-                ret.put("status", "started");
-                notifyListeners(LISTENING_EVENT, ret);
-                Logger.debug(TAG, "Listening started");
-            } finally {
-                lock.unlock();
-            }
+            // No longer emit started here — we emit it immediately after startListening()
+            // to guarantee the event fires even during silence
+            Logger.debug(TAG, "onBeginningOfSpeech callback (session " + listenerSessionId + ")");
         }
 
         @Override
@@ -317,40 +498,54 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onEndOfSpeech() {
-            bridge
-                .getWebView()
-                .post(() -> {
-                    try {
-                        lock.lock();
-                        listening(false);
-
-                        JSObject ret = new JSObject();
-                        ret.put("status", "stopped");
-                        notifyListeners(LISTENING_EVENT, ret);
-                    } finally {
-                        lock.unlock();
-                    }
-                });
+            Logger.debug(TAG, "onEndOfSpeech callback (session " + listenerSessionId + ")");
+            // Don't emit stopped here — wait for onResults or onError to finish the session properly
         }
 
         @Override
         public void onError(int error) {
-            stopListening();
-            String errorMssg = getErrorText(error);
-            Logger.error(TAG, "Recognizer error: " + errorMssg, null);
+            lock.lock();
+            long currentSessionId = listenerSessionId;
+            lock.unlock();
 
-            if (call != null) {
-                call.reject(errorMssg);
+            String errorCode = getErrorCode(error);
+            String errorMessage = getErrorText(error);
+            Logger.error(TAG, "Recognizer error: " + errorMessage + " (code=" + errorCode + ", session=" + currentSessionId + ")", null);
+
+            // Always emit error event — never swallow errors
+            JSObject errorPayload = new JSObject();
+            errorPayload.put("code", errorCode);
+            errorPayload.put("message", errorMessage);
+            errorPayload.put("sessionId", currentSessionId);
+            notifyListeners(ERROR_EVENT, errorPayload);
+
+            // Determine reason based on error type
+            String reason;
+            if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                reason = "silence";
+            } else {
+                reason = "error";
+            }
+
+            // Finish the session
+            finishSession(currentSessionId, reason, errorCode);
+
+            if (call != null && !partialResults) {
+                call.reject(errorMessage);
             }
         }
 
         @Override
         public void onResults(Bundle results) {
+            lock.lock();
+            long currentSessionId = listenerSessionId;
+            lock.unlock();
+
             ArrayList<String> matches = buildMatchesWithUnstableText(results);
 
             try {
                 JSArray jsArray = new JSArray(matches);
-                Logger.debug(TAG, "Received final results count=" + (matches == null ? 0 : matches.size()));
+                Logger.debug(TAG, "Received final results count=" + (matches == null ? 0 : matches.size()) + " (session " + currentSessionId + ")");
 
                 if (call != null) {
                     if (!partialResults) {
@@ -361,10 +556,15 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         notifyListeners(PARTIAL_RESULTS_EVENT, ret);
                     }
                 }
+
+                // Finish session with reason="results"
+                finishSession(currentSessionId, "results", null);
             } catch (Exception ex) {
+                Logger.error(TAG, "Error processing results", ex);
                 if (call != null) {
                     call.resolve(new JSObject().put("status", "error").put("message", ex.getMessage()));
                 }
+                finishSession(currentSessionId, "error", "RESULTS_PROCESSING_FAILED");
             }
         }
 

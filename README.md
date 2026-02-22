@@ -100,6 +100,29 @@ Add the following keys to your app `Info.plist`:
 
 ### available()
 
+## Deterministic Android state machine (v7.1.0)
+
+This plugin ships a deterministic finite state machine for the Android recognizer to make listening sessions predictable and observable from JavaScript.
+
+- States: `startingListening` → `started` → `stoppingListening` → `stopped` (internally: `STARTING`, `STARTED`, `STOPPING`, `IDLE`).
+- Each `start()` increments a `sessionId` (included in `listeningState` and `error` events).
+- Events emitted:
+  - `listeningState` — extended payload: `{ state?, sessionId?, reason?, errorCode?, status }` (status kept for backward compatibility).
+  - `error` — emitted for every native error: `{ code, message, sessionId }`.
+  - `readyForNextSession` — emitted after the native recognizer is torn down and recreated.
+
+Why this matters:
+- `started` is now always emitted immediately after `startListening()` succeeds, so UIs won't hang during silence.
+- Native `onError()` (e.g. `NO_MATCH`, `SPEECH_TIMEOUT`) is never swallowed — it emits `error` and the session transitions through `stoppingListening` → `stopped`.
+- Quick start/stop edge cases are handled reliably by fully tearing down and recreating the `SpeechRecognizer` between sessions.
+
+Migration notes:
+- Existing consumers using `addListener('listeningState', e => e.status === 'started')` continue to work unchanged.
+- To detect silence/timeouts handle the new `error` event (check `code === 'NO_MATCH'` or `SPEECH_TIMEOUT`).
+
+See IMPLEMENTATION_SUMMARY.md for full details and testing recommendations.
+
+
 ```typescript
 available() => Promise<SpeechRecognitionAvailability>
 ```

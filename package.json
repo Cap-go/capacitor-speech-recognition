@@ -45,6 +45,7 @@
     "swiftlint": "node-swiftlint",
     "docgen": "docgen --api SpeechRecognitionPlugin --output-readme README.md --output-json dist/docs.json",
     "build": "npm run clean && npm run docgen && tsc && rollup -c rollup.config.mjs",
+    "prepare": "npm run build",
     "clean": "rimraf ./dist",
     "watch": "tsc --watch",
     "prepublishOnly": "npm run build",

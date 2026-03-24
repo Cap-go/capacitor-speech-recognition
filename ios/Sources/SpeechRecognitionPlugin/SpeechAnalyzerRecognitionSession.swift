@@ -2,6 +2,8 @@ import Foundation
 @preconcurrency import AVFoundation
 import Speech
 
+#if compiler(>=6.2)
+
 @available(iOS 26.0, *)
 enum SpeechAnalyzerRecognitionSupport {
     static func supports(locale: Locale) async -> Bool {
@@ -384,3 +386,49 @@ private final class SpeechAnalyzerBufferConverter: @unchecked Sendable {
         return conversionBuffer
     }
 }
+
+#else
+
+enum SpeechAnalyzerRecognitionSupport {
+    static func supports(locale _: Locale) async -> Bool {
+        false
+    }
+
+    static func supportedLanguageIdentifiers() async -> [String] {
+        []
+    }
+
+    static func normalizedIdentifier(for locale: Locale) -> String {
+        locale.identifier
+    }
+}
+
+enum SpeechAnalyzerRecognitionError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "Speech analyzer requires a newer Apple SDK."
+    }
+}
+
+@MainActor
+final class SpeechAnalyzerRecognitionSession: NSObject {
+    typealias ResultHandler = @MainActor ([String], Bool) -> Void
+    typealias VoidHandler = @MainActor () -> Void
+    typealias ErrorHandler = @MainActor (Error) -> Void
+
+    var onListeningStarted: VoidHandler?
+    var onListeningStopped: VoidHandler?
+    var onResult: ResultHandler?
+    var onError: ErrorHandler?
+
+    init(locale _: Locale, maxResults _: Int, includePartialResults _: Bool) {}
+
+    func start() async throws {
+        throw SpeechAnalyzerRecognitionError.unavailable
+    }
+
+    func stop() async {}
+}
+
+#endif

@@ -33,10 +33,15 @@ let partialListener;
 let listeningListener;
 let segmentListener;
 let segmentedSessionListener;
+let readyListener;
 
 // PTT mode state
 let pttModeEnabled = false;
 let isPTTHeld = false;
+let pttTransitionId = 0;
+let pttTransitionInFlight = false;
+let keyboardPTTActive = false;
+let readyWaiters = [];
 
 const formatTime = () => new Date().toLocaleTimeString();
 
@@ -93,6 +98,46 @@ function syncListeningState(status) {
   refs.listening.textContent = active ? 'yes' : 'no';
 }
 
+function nextPTTTransitionId() {
+  pttTransitionId += 1;
+  return pttTransitionId;
+}
+
+function isCurrentPTTTransition(id) {
+  return pttTransitionId === id;
+}
+
+function flushReadyWaiters() {
+  const waiters = readyWaiters;
+  readyWaiters = [];
+  waiters.forEach((resolve) => resolve());
+}
+
+function waitForReadyForNextSession(timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      readyWaiters = readyWaiters.filter((waiter) => waiter !== onReady);
+      resolve();
+    }, timeoutMs);
+
+    const onReady = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+
+    readyWaiters.push(onReady);
+  });
+}
+
+function setPTTButtonState(held) {
+  refs.pttButton.classList.toggle('active', held);
+  refs.pttState.textContent = held ? 'held' : 'released';
+}
+
+function isPTTActivationKey(event) {
+  return event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter';
+}
+
 function togglePTTMode(enabled) {
   pttModeEnabled = enabled;
   refs.pttControls.classList.toggle('hidden', !enabled);
@@ -135,6 +180,13 @@ async function ensureListeners() {
   if (!segmentedSessionListener) {
     segmentedSessionListener = await SpeechRecognition.addListener('endOfSegmentedSession', () => {
       appendEvent('endOfSegmentedSession', 'Segment session ended');
+    });
+  }
+
+  if (!readyListener) {
+    readyListener = await SpeechRecognition.addListener('readyForNextSession', (event) => {
+      appendEvent('readyForNextSession', `session ${event.sessionId}`);
+      flushReadyWaiters();
     });
   }
 }
@@ -182,44 +234,65 @@ async function stopListening() {
 }
 
 async function handlePTTPress() {
-  if (isPTTHeld) return;
+  if (isPTTHeld || pttTransitionInFlight) return;
+  const transitionId = nextPTTTransitionId();
+  pttTransitionInFlight = true;
   isPTTHeld = true;
-  refs.pttButton.classList.add('active');
-  refs.pttState.textContent = 'held';
+  setPTTButtonState(true);
   refs.accumulatedResults.classList.add('hidden');
   refs.accumulatedText.textContent = '';
 
   try {
     await SpeechRecognition.setPTTState({ held: true });
+    if (!isCurrentPTTTransition(transitionId)) return;
     appendEvent('setPTTState()', 'held: true');
     await ensureListeners();
+    if (!isCurrentPTTTransition(transitionId)) return;
     const options = parseOptions();
     appendEvent('start() [PTT]', JSON.stringify(options));
     await SpeechRecognition.start(options);
+    if (!isCurrentPTTTransition(transitionId)) return;
   } catch (error) {
+    if (!isCurrentPTTTransition(transitionId)) return;
     appendEvent('PTT start error', error?.message ?? String(error));
-    handlePTTRelease();
+    isPTTHeld = false;
+    setPTTButtonState(false);
+  } finally {
+    if (isCurrentPTTTransition(transitionId)) {
+      pttTransitionInFlight = false;
+    }
   }
 }
 
 async function handlePTTRelease() {
-  if (!isPTTHeld) return;
+  if (!isPTTHeld && !pttTransitionInFlight) return;
+  const transitionId = nextPTTTransitionId();
+  pttTransitionInFlight = true;
   isPTTHeld = false;
-  refs.pttButton.classList.remove('active');
-  refs.pttState.textContent = 'released';
+  setPTTButtonState(false);
 
   try {
     await SpeechRecognition.setPTTState({ held: false });
+    if (!isCurrentPTTTransition(transitionId)) return;
     appendEvent('setPTTState()', 'held: false');
     appendEvent('forceStop()', 'requesting...');
     await SpeechRecognition.forceStop({ timeout: 1500 });
+    if (!isCurrentPTTTransition(transitionId)) return;
     appendEvent('forceStop()', 'completed');
+    await waitForReadyForNextSession();
+    if (!isCurrentPTTTransition(transitionId)) return;
     const lastResult = await SpeechRecognition.getLastPartialResult();
+    if (!isCurrentPTTTransition(transitionId)) return;
     if (lastResult.available) {
       appendEvent('getLastPartialResult()', lastResult.text);
     }
   } catch (error) {
+    if (!isCurrentPTTTransition(transitionId)) return;
     appendEvent('PTT stop error', error?.message ?? String(error));
+  } finally {
+    if (isCurrentPTTTransition(transitionId)) {
+      pttTransitionInFlight = false;
+    }
   }
 }
 
@@ -248,6 +321,23 @@ async function bootstrap() {
     handlePTTRelease();
   });
   refs.pttButton.addEventListener('touchcancel', handlePTTRelease);
+  refs.pttButton.addEventListener('keydown', (event) => {
+    if (!isPTTActivationKey(event)) return;
+    event.preventDefault();
+    if (event.repeat || keyboardPTTActive) return;
+    keyboardPTTActive = true;
+    handlePTTPress();
+  });
+  refs.pttButton.addEventListener('keyup', (event) => {
+    if (!isPTTActivationKey(event)) return;
+    event.preventDefault();
+    keyboardPTTActive = false;
+    handlePTTRelease();
+  });
+  refs.pttButton.addEventListener('blur', () => {
+    keyboardPTTActive = false;
+    handlePTTRelease();
+  });
 
   await Promise.all([updateAvailability(), updatePermissions()]);
 }
@@ -259,4 +349,5 @@ window.addEventListener('beforeunload', () => {
   listeningListener?.remove();
   segmentListener?.remove();
   segmentedSessionListener?.remove();
+  readyListener?.remove();
 });

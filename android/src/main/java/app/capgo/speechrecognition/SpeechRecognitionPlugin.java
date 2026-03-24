@@ -64,6 +64,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private boolean forceStopped = false;
     private boolean pttButtonHeld = false;
     private boolean continuousPTTMode = false;
+    private boolean popupSessionActive = false;
+    private boolean popupSessionCancelled = false;
     private StringBuilder accumulatedResults = new StringBuilder();
 
     private String lastLanguage = Locale.getDefault().toLanguageTag();
@@ -186,12 +188,18 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         final long currentSessionId;
         try {
             lock.lock();
+            if (state != ListeningState.IDLE) {
+                call.reject("Speech recognition is already running.");
+                return;
+            }
             cancelPendingForceStopLocked();
             forceStopped = false;
             pendingStopReason = null;
             resetPartialResultsCache();
             accumulatedResults = new StringBuilder();
             continuousPTTMode = continuousPTT;
+            popupSessionActive = false;
+            popupSessionCancelled = false;
             lastLanguage = language;
             lastMaxResults = maxResults;
             lastPrompt = prompt;
@@ -241,6 +249,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     @PluginMethod
     public void stop(PluginCall call) {
         final long currentSessionId;
+        final boolean popupActive;
+        PluginCall popupStartCall = null;
         try {
             lock.lock();
             if (state == ListeningState.IDLE && !listening) {
@@ -254,8 +264,25 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 state = ListeningState.STOPPING;
                 emitListeningState("stoppingListening", currentSessionId, "userStop", null, null);
             }
+
+            popupActive = popupSessionActive;
+            if (popupActive) {
+                cancelPendingForceStopLocked();
+                popupSessionCancelled = true;
+                popupStartCall = activeStartCall;
+                activeStartCall = null;
+            }
         } finally {
             lock.unlock();
+        }
+
+        if (popupStartCall != null) {
+            popupStartCall.reject("Recognition stopped before final results were produced.");
+        }
+
+        if (popupActive) {
+            call.resolve();
+            return;
         }
 
         bridge
@@ -282,6 +309,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     public void forceStop(PluginCall call) {
         final int timeout = call.getInt("timeout", FORCE_STOP_TIMEOUT_MS);
         final long currentSessionId;
+        final boolean popupActive;
+        PluginCall popupStartCall = null;
         try {
             lock.lock();
             if (state == ListeningState.IDLE && !listening) {
@@ -296,8 +325,16 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 emitListeningState("stoppingListening", currentSessionId, "forceStop", null, null);
             }
 
+            popupActive = popupSessionActive;
+            if (popupActive) {
+                cancelPendingForceStopLocked();
+                popupSessionCancelled = true;
+                popupStartCall = activeStartCall;
+                activeStartCall = null;
+            }
+
             cancelPendingForceStopLocked();
-            if (speechRecognizer != null) {
+            if (!popupActive && speechRecognizer != null) {
                 try {
                     speechRecognizer.stopListening();
                 } catch (Exception ignored) {}
@@ -328,9 +365,20 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 }
                 finishSession(currentSessionId, "forceStop", null);
             };
-            handler.postDelayed(forceStopRunnable, timeout);
+            if (!popupActive) {
+                handler.postDelayed(forceStopRunnable, timeout);
+            }
         } finally {
             lock.unlock();
+        }
+
+        if (popupStartCall != null) {
+            popupStartCall.reject("Recognition force stopped before final results were produced.");
+        }
+
+        if (popupActive) {
+            call.resolve();
+            return;
         }
 
         call.resolve();
@@ -424,14 +472,21 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     @ActivityCallback
     private void listeningResult(PluginCall call, ActivityResult result) {
         long currentSessionId;
+        String finalReason;
+        boolean popupCancelled;
         try {
             lock.lock();
             currentSessionId = sessionId;
+            finalReason = pendingStopReason != null ? pendingStopReason : "results";
+            popupCancelled = popupSessionCancelled;
+            popupSessionActive = false;
+            popupSessionCancelled = false;
+            activeStartCall = null;
         } finally {
             lock.unlock();
         }
 
-        if (call != null) {
+        if (call != null && !popupCancelled) {
             int resultCode = result.getResultCode();
             if (resultCode == Activity.RESULT_OK) {
                 try {
@@ -445,7 +500,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             }
         }
 
-        finishSession(currentSessionId, "results", null);
+        finishSession(currentSessionId, finalReason, null);
     }
 
     private void beginListening(
@@ -467,6 +522,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 lock.lock();
                 listening(true);
                 state = ListeningState.STARTED;
+                popupSessionActive = true;
+                popupSessionCancelled = false;
+                activeStartCall = call;
             } finally {
                 lock.unlock();
             }
@@ -729,6 +787,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 activeStartCall = null;
                 pendingStopReason = null;
                 continuousPTTMode = false;
+                popupSessionActive = false;
+                popupSessionCancelled = false;
                 forceStopped = false;
                 resetPartialResultsCache();
                 accumulatedResults = new StringBuilder();
@@ -915,6 +975,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             destroyCurrentRecognizerLocked();
             activeStartCall = null;
             pendingStopReason = null;
+            popupSessionActive = false;
+            popupSessionCancelled = false;
             listening(false);
             state = ListeningState.IDLE;
         } finally {

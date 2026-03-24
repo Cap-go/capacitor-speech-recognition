@@ -417,6 +417,7 @@ final class SpeechAnalyzerRecognitionSession: NSObject {
     typealias VoidHandler = @MainActor () -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
 
+    var isRunning = false
     var onListeningStarted: VoidHandler?
     var onListeningStopped: VoidHandler?
     var onResult: ResultHandler?
@@ -428,7 +429,9 @@ final class SpeechAnalyzerRecognitionSession: NSObject {
         throw SpeechAnalyzerRecognitionError.unavailable
     }
 
-    func stop() async {}
+    func stop() async {
+        isRunning = false
+    }
 }
 
 #endif

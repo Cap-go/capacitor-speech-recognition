@@ -16,6 +16,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "SpeechRecognition"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "available", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "isOnDeviceRecognitionAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getSupportedLanguages", returnType: CAPPluginReturnPromise),
@@ -29,6 +30,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var speechRecognizer: SFSpeechRecognizer?
+    private var modernRecognitionSession: AnyObject?
     private var activeCall: CAPPluginCall?
     private var currentOptions: RecognitionOptions?
     private var hasInstalledTap = false
@@ -41,8 +43,21 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["available": recognizer?.isAvailable ?? false])
     }
 
+    @objc func isOnDeviceRecognitionAvailable(_ call: CAPPluginCall) {
+        let locale = Locale(identifier: call.getString("language") ?? Locale.current.identifier)
+        if #available(iOS 26.0, *) {
+            Task { @MainActor in
+                let isAvailable = await SpeechAnalyzerRecognitionSupport.supports(locale: locale)
+                call.resolve(["available": isAvailable])
+            }
+            return
+        }
+
+        call.resolve(["available": false])
+    }
+
     @objc func start(_ call: CAPPluginCall) {
-        if self.audioEngine.isRunning || recognitionTask != nil {
+        if isRecognitionActive {
             CAPLog.print("[SpeechRecognition] Attempted to start while already running")
             call.reject("Speech recognition is already running.")
             return
@@ -58,7 +73,8 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             language: call.getString("language") ?? Locale.current.identifier,
             maxResults: call.getInt("maxResults") ?? maxDefaultResults,
             partialResults: call.getBool("partialResults") ?? false,
-            addPunctuation: call.getBool("addPunctuation") ?? false
+            addPunctuation: call.getBool("addPunctuation") ?? false,
+            useOnDeviceRecognition: call.getBool("useOnDeviceRecognition") ?? false
         )
 
         self.activeCall = call
@@ -70,7 +86,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                 CAPLog.print("[SpeechRecognition] Microphone permission denied by user")
                 DispatchQueue.main.async {
                     call.reject("User denied microphone access.")
-                    self.cleanupRecognition(notifyStop: false)
+                    self.cleanupLegacyRecognition(notifyStop: false)
                 }
                 return
             }
@@ -83,12 +99,20 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func stop(_ call: CAPPluginCall) {
         CAPLog.print("[SpeechRecognition] stop() invoked")
-        cleanupRecognition(notifyStop: true)
+        if #available(iOS 26.0, *), let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
+            Task { @MainActor in
+                await modernSession.stop()
+                call.resolve()
+            }
+            return
+        }
+
+        cleanupLegacyRecognition(notifyStop: true)
         call.resolve()
     }
 
     @objc func isListening(_ call: CAPPluginCall) {
-        call.resolve(["listening": audioEngine.isRunning])
+        call.resolve(["listening": isRecognitionActive])
     }
 
     @objc func getSupportedLanguages(_ call: CAPPluginCall) {
@@ -130,15 +154,28 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func beginRecognition(call: CAPPluginCall, options: RecognitionOptions) {
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: options.language)) else {
+        Task { @MainActor in
+            let locale = Locale(identifier: options.language)
+            if #available(iOS 26.0, *),
+               options.useOnDeviceRecognition,
+               await SpeechAnalyzerRecognitionSupport.supports(locale: locale) {
+                self.beginModernRecognition(call: call, options: options, locale: locale)
+            } else {
+                self.beginLegacyRecognition(call: call, options: options, locale: locale)
+            }
+        }
+    }
+
+    private func beginLegacyRecognition(call: CAPPluginCall, options: RecognitionOptions, locale: Locale) {
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
             call.reject("Unsupported locale: \(options.language)")
-            cleanupRecognition(notifyStop: false)
+            cleanupLegacyRecognition(notifyStop: false)
             return
         }
 
         guard recognizer.isAvailable else {
             call.reject("Speech recognizer is currently unavailable.")
-            cleanupRecognition(notifyStop: false)
+            cleanupLegacyRecognition(notifyStop: false)
             return
         }
 
@@ -148,7 +185,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             try configureAudioSession()
         } catch {
             call.reject("Failed to configure audio session: \(error.localizedDescription)")
-            cleanupRecognition(notifyStop: false)
+            cleanupLegacyRecognition(notifyStop: false)
             return
         }
 
@@ -174,12 +211,13 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             notifyListeners("listeningState", data: ["status": "started"])
         } catch {
             call.reject("Unable to start audio engine: \(error.localizedDescription)")
-            cleanupRecognition(notifyStop: false)
+            cleanupLegacyRecognition(notifyStop: false)
             return
         }
 
         if options.partialResults {
             call.resolve()
+            activeCall = nil
         }
 
         recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
@@ -192,17 +230,80 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                     }
                 } else if result.isFinal {
                     DispatchQueue.main.async {
-                        self.activeCall?.resolve(["matches": matches])
+                        let activeCall = self.activeCall
+                        self.cleanupLegacyRecognition(notifyStop: true)
+                        activeCall?.resolve(["matches": matches])
                     }
+                    return
                 }
 
                 if result.isFinal {
-                    self.cleanupRecognition(notifyStop: true)
+                    self.cleanupLegacyRecognition(notifyStop: true)
                 }
             }
 
             if let error {
                 self.handleRecognitionError(error)
+            }
+        }
+    }
+
+    @available(iOS 26.0, *)
+    @MainActor
+    private func beginModernRecognition(call: CAPPluginCall, options: RecognitionOptions, locale: Locale) {
+        let session = SpeechAnalyzerRecognitionSession(
+            locale: locale,
+            maxResults: options.maxResults,
+            includePartialResults: options.partialResults
+        )
+        modernRecognitionSession = session
+
+        session.onListeningStarted = { [weak self, weak session] in
+            guard let self, let session, self.modernRecognitionSession === session else { return }
+            self.notifyListeners("listeningState", data: ["status": "started"])
+        }
+
+        session.onListeningStopped = { [weak self, weak session] in
+            guard let self, let session, self.modernRecognitionSession === session else { return }
+            self.clearModernRecognition(notifyStop: true)
+        }
+
+        session.onResult = { [weak self, weak session] matches, isFinal in
+            guard let self, let session, self.modernRecognitionSession === session else { return }
+
+            if options.partialResults {
+                self.notifyListeners("partialResults", data: ["matches": matches])
+                return
+            }
+
+            guard isFinal else {
+                return
+            }
+
+            let activeCall = self.activeCall
+            self.clearModernRecognition(notifyStop: true)
+            activeCall?.resolve(["matches": matches])
+            Task { @MainActor in
+                await session.stop()
+            }
+        }
+
+        session.onError = { [weak self, weak session] error in
+            guard let self, let session, self.modernRecognitionSession === session else { return }
+            self.handleRecognitionError(error)
+        }
+
+        Task { @MainActor [weak self, weak session] in
+            guard let self, let session, self.modernRecognitionSession === session else { return }
+            do {
+                try await session.start()
+                if options.partialResults {
+                    call.resolve()
+                    self.activeCall = nil
+                }
+            } catch {
+                call.reject(error.localizedDescription)
+                self.clearModernRecognition(notifyStop: false)
             }
         }
     }
@@ -214,7 +315,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         try session.setActive(true, options: .notifyOthersOnDeactivation)
     }
 
-    private func cleanupRecognition(notifyStop: Bool) {
+    private func cleanupLegacyRecognition(notifyStop: Bool) {
         DispatchQueue.main.async {
             CAPLog.print("[SpeechRecognition] Cleaning up recognition resources")
             if self.audioEngine.isRunning {
@@ -240,11 +341,29 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    private func clearModernRecognition(notifyStop: Bool) {
+        DispatchQueue.main.async {
+            CAPLog.print("[SpeechRecognition] Clearing iOS 26 recognition state")
+            self.modernRecognitionSession = nil
+            self.currentOptions = nil
+            self.activeCall = nil
+
+            if notifyStop {
+                self.notifyListeners("listeningState", data: ["status": "stopped"])
+            }
+        }
+    }
+
     private func handleRecognitionError(_ error: Error) {
         DispatchQueue.main.async {
             CAPLog.print("[SpeechRecognition] Error from recognizer: \(error.localizedDescription)")
-            self.cleanupRecognition(notifyStop: true)
-            self.activeCall?.reject(error.localizedDescription)
+            let activeCall = self.activeCall
+            if self.modernRecognitionSession != nil {
+                self.clearModernRecognition(notifyStop: true)
+            } else {
+                self.cleanupLegacyRecognition(notifyStop: true)
+            }
+            activeCall?.reject(error.localizedDescription)
         }
     }
 
@@ -265,6 +384,18 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         @unknown default:
             return false
         }
+    }
+
+    private var isRecognitionActive: Bool {
+        if audioEngine.isRunning || recognitionTask != nil {
+            return true
+        }
+
+        if #available(iOS 26.0, *), modernRecognitionSession is SpeechAnalyzerRecognitionSession {
+            return true
+        }
+
+        return false
     }
 
     private var permissionState: PermissionState {
@@ -292,4 +423,5 @@ private struct RecognitionOptions {
     let maxResults: Int
     let partialResults: Bool
     let addPunctuation: Bool
+    let useOnDeviceRecognition: Bool
 }

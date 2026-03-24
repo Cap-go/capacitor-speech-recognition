@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
+import android.speech.RecognitionSupport;
+import android.speech.RecognitionSupportCallback;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import androidx.activity.result.ActivityResult;
@@ -23,6 +25,7 @@ import com.getcapacitor.annotation.PermissionCallback;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 import org.json.JSONArray;
 
@@ -62,6 +65,47 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     @PluginMethod
+    public void isOnDeviceRecognitionAvailable(PluginCall call) {
+        String language = call.getString("language", Locale.getDefault().toLanguageTag());
+        if (!canUseOnDeviceRecognition()) {
+            call.resolve(new JSObject().put("available", false));
+            return;
+        }
+
+        SpeechRecognizer supportChecker;
+        try {
+            supportChecker = SpeechRecognizer.createOnDeviceSpeechRecognizer(bridge.getActivity());
+        } catch (UnsupportedOperationException ex) {
+            call.resolve(new JSObject().put("available", false));
+            return;
+        }
+
+        Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, true);
+        supportChecker.checkRecognitionSupport(
+            intent,
+            mainExecutor(),
+            new RecognitionSupportCallback() {
+                @Override
+                public void onSupportResult(RecognitionSupport support) {
+                    boolean available =
+                        isLanguageSupported(language, support.getInstalledOnDeviceLanguages()) ||
+                        isLanguageSupported(language, support.getSupportedOnDeviceLanguages()) ||
+                        isLanguageSupported(language, support.getPendingOnDeviceLanguages());
+                    supportChecker.destroy();
+                    call.resolve(new JSObject().put("available", available));
+                }
+
+                @Override
+                public void onError(int error) {
+                    Logger.warn(TAG, "On-device recognition support check failed: " + getErrorText(error));
+                    supportChecker.destroy();
+                    call.resolve(new JSObject().put("available", false));
+                }
+            }
+        );
+    }
+
+    @PluginMethod
     public void start(PluginCall call) {
         if (!SpeechRecognizer.isRecognitionAvailable(bridge.getContext())) {
             Logger.warn(TAG, "start() called but speech recognizer unavailable");
@@ -75,24 +119,37 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        String language = call.getString("language", Locale.getDefault().toString());
+        String language = call.getString("language", Locale.getDefault().toLanguageTag());
         int maxResults = call.getInt("maxResults", MAX_RESULTS);
         String prompt = call.getString("prompt", null);
         boolean partialResults = call.getBoolean("partialResults", false);
         boolean popup = call.getBoolean("popup", false);
+        boolean useOnDeviceRecognition = call.getBoolean("useOnDeviceRecognition", false);
         int allowForSilence = call.getInt("allowForSilence", 0);
+
+        if (useOnDeviceRecognition && popup) {
+            call.reject("On-device recognition is not supported with popup mode on Android.");
+            return;
+        }
+
+        if (useOnDeviceRecognition && !canUseOnDeviceRecognition()) {
+            call.unavailable("On-device speech recognition is not available on this device.");
+            return;
+        }
+
         Logger.info(
             TAG,
             String.format(
-                "Starting recognition | lang=%s maxResults=%d partial=%s popup=%s allowForSilence=%d",
+                "Starting recognition | lang=%s maxResults=%d partial=%s popup=%s onDevice=%s allowForSilence=%d",
                 language,
                 maxResults,
                 partialResults,
                 popup,
+                useOnDeviceRecognition,
                 allowForSilence
             )
         );
-        beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence);
+        beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence, useOnDeviceRecognition);
     }
 
     @PluginMethod
@@ -190,7 +247,41 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         final boolean partialResults,
         boolean showPopup,
         PluginCall call,
-        int allowForSilence
+        int allowForSilence,
+        boolean useOnDeviceRecognition
+    ) {
+        Intent intent = buildRecognizerIntent(language, maxResults, prompt, partialResults, allowForSilence, useOnDeviceRecognition);
+
+        if (showPopup) {
+            startActivityForResult(call, intent, "listeningResult");
+        } else {
+            bridge
+                .getWebView()
+                .post(() -> {
+                    try {
+                        lock.lock();
+                        recreateSpeechRecognizer(call, partialResults, useOnDeviceRecognition);
+                        if (useOnDeviceRecognition) {
+                            beginOnDeviceListening(intent, language, partialResults, call);
+                        } else {
+                            startInlineListening(intent, partialResults, call);
+                        }
+                    } catch (Exception ex) {
+                        call.reject(ex.getMessage());
+                    } finally {
+                        lock.unlock();
+                    }
+                });
+        }
+    }
+
+    private Intent buildRecognizerIntent(
+        String language,
+        int maxResults,
+        String prompt,
+        boolean partialResults,
+        int allowForSilence,
+        boolean useOnDeviceRecognition
     ) {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
@@ -199,6 +290,10 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, bridge.getActivity().getPackageName());
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, partialResults);
         intent.putExtra("android.speech.extra.DICTATION_MODE", partialResults);
+
+        if (useOnDeviceRecognition) {
+            intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+        }
 
         if (allowForSilence > 0) {
             intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, true);
@@ -210,38 +305,121 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
         }
 
-        if (showPopup) {
-            startActivityForResult(call, intent, "listeningResult");
-        } else {
-            bridge
-                .getWebView()
-                .post(() -> {
-                    try {
-                        lock.lock();
+        return intent;
+    }
 
-                        if (speechRecognizer != null) {
-                            speechRecognizer.cancel();
-                            speechRecognizer.destroy();
-                            speechRecognizer = null;
-                        }
-
-                        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
-                        SpeechRecognitionListener listener = new SpeechRecognitionListener();
-                        listener.setCall(call);
-                        listener.setPartialResults(partialResults);
-                        speechRecognizer.setRecognitionListener(listener);
-                        speechRecognizer.startListening(intent);
-                        listening(true);
-                        if (partialResults) {
-                            call.resolve();
-                        }
-                    } catch (Exception ex) {
-                        call.reject(ex.getMessage());
-                    } finally {
-                        lock.unlock();
-                    }
-                });
+    private void recreateSpeechRecognizer(PluginCall call, boolean partialResults, boolean useOnDeviceRecognition) {
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+            speechRecognizer.destroy();
+            speechRecognizer = null;
         }
+
+        speechRecognizer = useOnDeviceRecognition
+            ? SpeechRecognizer.createOnDeviceSpeechRecognizer(bridge.getActivity())
+            : SpeechRecognizer.createSpeechRecognizer(bridge.getActivity());
+
+        SpeechRecognitionListener listener = new SpeechRecognitionListener();
+        listener.setCall(call);
+        listener.setPartialResults(partialResults);
+        speechRecognizer.setRecognitionListener(listener);
+    }
+
+    private void beginOnDeviceListening(Intent intent, String language, boolean partialResults, PluginCall call) {
+        speechRecognizer.checkRecognitionSupport(
+            intent,
+            mainExecutor(),
+            new RecognitionSupportCallback() {
+                @Override
+                public void onSupportResult(RecognitionSupport support) {
+                    boolean installed = isLanguageSupported(language, support.getInstalledOnDeviceLanguages());
+                    boolean supported =
+                        installed ||
+                        isLanguageSupported(language, support.getSupportedOnDeviceLanguages()) ||
+                        isLanguageSupported(language, support.getPendingOnDeviceLanguages());
+
+                    if (!supported) {
+                        call.reject("On-device recognition is not available for language: " + language);
+                        return;
+                    }
+
+                    if (installed) {
+                        startInlineListening(intent, partialResults, call);
+                        return;
+                    }
+
+                    triggerOnDeviceModelDownload(intent, partialResults, call);
+                }
+
+                @Override
+                public void onError(int error) {
+                    call.reject(getErrorText(error));
+                }
+            }
+        );
+    }
+
+    private void triggerOnDeviceModelDownload(Intent intent, boolean partialResults, PluginCall call) {
+        speechRecognizer.triggerModelDownload(
+            intent,
+            mainExecutor(),
+            new android.speech.ModelDownloadListener() {
+                @Override
+                public void onProgress(int completedPercent) {}
+
+                @Override
+                public void onSuccess() {
+                    startInlineListening(intent, partialResults, call);
+                }
+
+                @Override
+                public void onScheduled() {
+                    call.reject("On-device speech model download was scheduled. Try again once it finishes.");
+                }
+
+                @Override
+                public void onError(int error) {
+                    call.reject(getErrorText(error));
+                }
+            }
+        );
+    }
+
+    private void startInlineListening(Intent intent, boolean partialResults, PluginCall call) {
+        speechRecognizer.startListening(intent);
+        listening(true);
+        if (partialResults) {
+            call.resolve();
+        }
+    }
+
+    private boolean canUseOnDeviceRecognition() {
+        return (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && SpeechRecognizer.isOnDeviceRecognitionAvailable(bridge.getContext())
+        );
+    }
+
+    private boolean isLanguageSupported(String requestedLanguage, List<String> candidateLanguages) {
+        if (candidateLanguages == null || candidateLanguages.isEmpty()) {
+            return false;
+        }
+
+        String normalizedRequestedLanguage = normalizeLanguageTag(requestedLanguage);
+        for (String candidateLanguage : candidateLanguages) {
+            if (normalizedRequestedLanguage.equals(normalizeLanguageTag(candidateLanguage))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private String normalizeLanguageTag(String language) {
+        return language == null ? "" : language.replace('_', '-').toLowerCase(Locale.US);
+    }
+
+    private Executor mainExecutor() {
+        return (command) -> bridge.getActivity().runOnUiThread(command);
     }
 
     private void stopListening() {

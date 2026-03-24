@@ -40,6 +40,26 @@ export interface SpeechRecognitionStartOptions {
    */
   addPunctuation?: boolean;
   /**
+   * Opt in to the platform's newer on-device recognition path when available.
+   *
+   * On iOS 26+, this uses Apple's `SpeechAnalyzer` / `SpeechTranscriber` pipeline.
+   * On recent Android versions, this uses the on-device `SpeechRecognizer` path.
+   *
+   * It is intentionally opt-in so existing apps keep the legacy flow unless they choose
+   * to roll out the new behavior.
+   *
+   * Use {@link SpeechRecognitionPlugin.isOnDeviceRecognitionAvailable} before enabling it in production.
+   *
+   * Platform SDK docs:
+   * iOS: [Speech](https://developer.apple.com/documentation/speech),
+   * [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer),
+   * [SpeechTranscriber](https://developer.apple.com/documentation/speech/speechtranscriber)
+   * Android: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer)
+   *
+   * Defaults to `false`.
+   */
+  useOnDeviceRecognition?: boolean;
+  /**
    * Allow a number of milliseconds of silence before splitting the recognition session into segments.
    * Required to be greater than zero and currently supported on Android only.
    */
@@ -89,10 +109,30 @@ export interface SpeechRecognitionPlugin {
    */
   available(): Promise<SpeechRecognitionAvailability>;
   /**
+   * Checks whether the platform's newer on-device recognition path is available for the selected locale.
+   *
+   * This is the capability check you should use before enabling `useOnDeviceRecognition`.
+   * A `true` result means the current device, OS version, and locale can use the newer
+   * on-device path for that platform.
+   *
+   * Returns `false` when the device only supports the legacy recognizer path.
+   *
+   * Platform SDK docs:
+   * iOS: [Speech](https://developer.apple.com/documentation/speech)
+   * Android: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer)
+   */
+  isOnDeviceRecognitionAvailable(
+    options?: Pick<SpeechRecognitionStartOptions, 'language'>,
+  ): Promise<SpeechRecognitionAvailability>;
+  /**
    * Begins capturing audio and transcribing speech.
    *
    * When `partialResults` is `true`, the returned promise resolves immediately and updates are
    * streamed through the `partialResults` listener until {@link stop} is called.
+   *
+   * The default path keeps the legacy recognizer behavior for backward compatibility.
+   * Pass `useOnDeviceRecognition: true` only after checking
+   * {@link SpeechRecognitionPlugin.isOnDeviceRecognitionAvailable}.
    */
   start(options?: SpeechRecognitionStartOptions): Promise<SpeechRecognitionMatches>;
   /**

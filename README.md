@@ -617,13 +617,13 @@ Raised whenever a segmented result is produced (Android only).
 
 Raised whenever a partial transcription is produced.
 
-| Prop                  | Type                  | Description                                                                       |
-| --------------------- | --------------------- | --------------------------------------------------------------------------------- |
-| **`matches`**         | <code>string[]</code> |                                                                                   |
-| **`accumulated`**     | <code>string</code>   | Accumulated transcription from earlier continuous PTT cycles.                     |
-| **`accumulatedText`** | <code>string</code>   | Final accumulated text including the current result.                              |
-| **`isRestarting`**    | <code>boolean</code>  | `true` when the plugin is restarting recognition inside a continuous PTT session. |
-| **`forced`**          | <code>boolean</code>  | `true` when the payload was emitted by `forceStop()`.                             |
+| Prop                  | Type                  | Description                                                                                                                       |
+| --------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **`matches`**         | <code>string[]</code> | Current recognition matches when the native recognizer reports them. This can be omitted for forced or accumulated-only payloads. |
+| **`accumulated`**     | <code>string</code>   | Accumulated transcription from earlier continuous PTT cycles.                                                                     |
+| **`accumulatedText`** | <code>string</code>   | Final accumulated text including the current result.                                                                              |
+| **`isRestarting`**    | <code>boolean</code>  | `true` when the plugin is restarting recognition inside a continuous PTT session.                                                 |
+| **`forced`**          | <code>boolean</code>  | `true` when the payload was emitted by `forceStop()`.                                                                             |
 
 
 #### SpeechRecognitionListeningEvent

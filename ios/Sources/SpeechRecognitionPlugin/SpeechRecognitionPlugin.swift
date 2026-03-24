@@ -567,7 +567,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func rejectPendingStartCallIfNeeded(message: String) {
-        guard let startCall = activeCall, !(currentOptions?.partialResults ?? false) else {
+        guard let startCall = activeCall else {
             return
         }
 

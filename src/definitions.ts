@@ -76,7 +76,12 @@ export interface SpeechRecognitionStartOptions {
  * Raised whenever a partial transcription is produced.
  */
 export interface SpeechRecognitionPartialResultEvent {
-  matches: string[];
+  /**
+   * Current recognition matches when the native recognizer reports them.
+   *
+   * This can be omitted for forced or accumulated-only payloads.
+   */
+  matches?: string[];
   /**
    * Accumulated transcription from earlier continuous PTT cycles.
    */

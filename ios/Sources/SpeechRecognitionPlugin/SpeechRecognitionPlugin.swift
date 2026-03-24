@@ -53,8 +53,12 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private var activeSessionId: Int?
     private var pendingStopReason: ListeningReason?
     private var emittedStoppingSessionId: Int?
+    private var accumulatedTranscript = ""
+    private var pendingContinuousRestartSessionId: Int?
+    private var continuousRestartWorkItem: DispatchWorkItem?
 
     private let maxDefaultResults = 5
+    private let continuousRestartDelay: TimeInterval = 0.1
 
     @objc func available(_ call: CAPPluginCall) {
         let locale = Locale(identifier: call.getString("language") ?? Locale.current.identifier)
@@ -95,14 +99,21 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             continuousPTT: call.getBool("continuousPTT") ?? false
         )
 
+        if options.continuousPTT && !options.partialResults {
+            call.reject("continuousPTT requires partialResults: true.")
+            return
+        }
+
         nextSessionId += 1
         let sessionId = nextSessionId
         activeSessionId = sessionId
         activeCall = call
         currentOptions = options
         latestPartialMatches = []
+        accumulatedTranscript = ""
         pendingStopReason = nil
         emittedStoppingSessionId = nil
+        cancelPendingContinuousRestart()
 
         emitListeningState(
             state: "startingListening",
@@ -113,6 +124,9 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         AVAudioSession.sharedInstance().requestRecordPermission { granted in
             guard granted else {
                 DispatchQueue.main.async {
+                    guard self.activeSessionId == sessionId else {
+                        return
+                    }
                     self.emitErrorEvent(
                         code: "MICROPHONE_PERMISSION_DENIED",
                         message: "User denied microphone access.",
@@ -126,7 +140,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             DispatchQueue.main.async {
-                self.beginRecognition(call: call, options: options, sessionId: sessionId)
+                self.beginRecognition(call: call, options: options, sessionId: sessionId, restarting: false)
             }
         }
     }
@@ -165,11 +179,8 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         emitStoppingIfNeeded(sessionId: sessionId, reason: .forceStop, errorCode: nil)
         rejectPendingStartCallIfNeeded(message: "Recognition force stopped before final results were produced.")
 
-        if !latestPartialMatches.isEmpty {
-            notifyListeners("partialResults", data: [
-                "matches": latestPartialMatches,
-                "forced": true
-            ])
+        if !latestPartialMatches.isEmpty || !accumulatedTranscriptText().isEmpty {
+            emitPartialResultEvent(matches: latestPartialMatches, forced: true, includeAccumulatedText: true)
         }
 
         if #available(iOS 26.0, *), let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
@@ -187,7 +198,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func getLastPartialResult(_ call: CAPPluginCall) {
-        let text = latestPartialMatches.first ?? ""
+        let text = currentTranscriptText()
         call.resolve([
             "available": !text.isEmpty,
             "text": text,
@@ -200,6 +211,9 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         pttButtonHeld = held
         if held {
             latestPartialMatches = []
+            accumulatedTranscript = ""
+            pendingStopReason = nil
+            cancelPendingContinuousRestart()
         }
         call.resolve()
     }
@@ -250,7 +264,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["version": pluginVersion])
     }
 
-    private func beginRecognition(call: CAPPluginCall, options: RecognitionOptions, sessionId: Int) {
+    private func beginRecognition(call: CAPPluginCall?, options: RecognitionOptions, sessionId: Int, restarting: Bool) {
         Task { @MainActor in
             guard activeSessionId == sessionId else {
                 return
@@ -260,20 +274,26 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             if #available(iOS 26.0, *),
                options.useOnDeviceRecognition,
                await SpeechAnalyzerRecognitionSupport.supports(locale: locale) {
-                beginModernRecognition(call: call, options: options, locale: locale, sessionId: sessionId)
+                beginModernRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
             } else {
-                beginLegacyRecognition(call: call, options: options, locale: locale, sessionId: sessionId)
+                beginLegacyRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
             }
         }
     }
 
-    private func beginLegacyRecognition(call: CAPPluginCall, options: RecognitionOptions, locale: Locale, sessionId: Int) {
+    private func beginLegacyRecognition(
+        call: CAPPluginCall?,
+        options: RecognitionOptions,
+        locale: Locale,
+        sessionId: Int,
+        restarting: Bool
+    ) {
         guard activeSessionId == sessionId else {
             return
         }
 
         guard let recognizer = SFSpeechRecognizer(locale: locale) else {
-            call.reject("Unsupported locale: \(options.language)")
+            call?.reject("Unsupported locale: \(options.language)")
             emitErrorEvent(code: "UNSUPPORTED_LOCALE", message: "Unsupported locale: \(options.language)", sessionId: sessionId)
             activeCall = nil
             finishSessionIfNeeded(sessionId: sessionId, reason: .error, errorCode: "UNSUPPORTED_LOCALE")
@@ -281,7 +301,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         guard recognizer.isAvailable else {
-            call.reject("Speech recognizer is currently unavailable.")
+            call?.reject("Speech recognizer is currently unavailable.")
             emitErrorEvent(code: "RECOGNIZER_UNAVAILABLE", message: "Speech recognizer is currently unavailable.", sessionId: sessionId)
             activeCall = nil
             finishSessionIfNeeded(sessionId: sessionId, reason: .error, errorCode: "RECOGNIZER_UNAVAILABLE")
@@ -293,7 +313,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         do {
             try configureAudioSession()
         } catch {
-            call.reject("Failed to configure audio session: \(error.localizedDescription)")
+            call?.reject("Failed to configure audio session: \(error.localizedDescription)")
             emitErrorEvent(code: "AUDIO_SESSION_FAILED", message: error.localizedDescription, sessionId: sessionId)
             activeCall = nil
             finishSessionIfNeeded(sessionId: sessionId, reason: .error, errorCode: "AUDIO_SESSION_FAILED")
@@ -319,16 +339,16 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         do {
             try audioEngine.start()
-            emitListeningState(state: "started", sessionId: sessionId, reason: .userStart, status: "started")
+            emitListeningState(state: "started", sessionId: sessionId, reason: restarting ? .results : .userStart, status: "started")
         } catch {
-            call.reject("Unable to start audio engine: \(error.localizedDescription)")
+            call?.reject("Unable to start audio engine: \(error.localizedDescription)")
             emitErrorEvent(code: "AUDIO_ENGINE_START_FAILED", message: error.localizedDescription, sessionId: sessionId)
             activeCall = nil
             finishSessionIfNeeded(sessionId: sessionId, reason: .error, errorCode: "AUDIO_ENGINE_START_FAILED")
             return
         }
 
-        if options.partialResults {
+        if options.partialResults, let call {
             call.resolve()
             activeCall = nil
         }
@@ -347,20 +367,31 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                     let matches = self.buildMatches(from: result, maxResults: options.maxResults)
                     self.latestPartialMatches = matches
 
-                    if options.partialResults {
-                        self.notifyListeners("partialResults", data: ["matches": matches])
-                    } else if result.isFinal {
-                        let startCall = self.activeCall
-                        self.activeCall = nil
-                        startCall?.resolve(["matches": matches])
-                    }
-
                     if result.isFinal {
+                        if self.prepareContinuousRestartIfNeeded(matches: matches, sessionId: sessionId) {
+                            self.clearLegacyRecognitionResources()
+                            self.scheduleContinuousRestart(sessionId: sessionId)
+                            return
+                        }
+
+                        if options.partialResults {
+                            self.emitPartialResultEvent(
+                                matches: matches,
+                                includeAccumulatedText: !self.accumulatedTranscriptText().isEmpty
+                            )
+                        } else {
+                            let startCall = self.activeCall
+                            self.activeCall = nil
+                            startCall?.resolve(["matches": matches])
+                        }
+
                         self.finishSessionIfNeeded(
                             sessionId: sessionId,
                             reason: self.pendingStopReason ?? .results,
                             errorCode: nil
                         )
+                    } else if options.partialResults {
+                        self.emitPartialResultEvent(matches: matches)
                     }
                 }
 
@@ -373,7 +404,13 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @available(iOS 26.0, *)
     @MainActor
-    private func beginModernRecognition(call: CAPPluginCall, options: RecognitionOptions, locale: Locale, sessionId: Int) {
+    private func beginModernRecognition(
+        call: CAPPluginCall?,
+        options: RecognitionOptions,
+        locale: Locale,
+        sessionId: Int,
+        restarting: Bool
+    ) {
         let session = SpeechAnalyzerRecognitionSession(
             locale: locale,
             maxResults: options.maxResults,
@@ -386,11 +423,17 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
-            self.emitListeningState(state: "started", sessionId: sessionId, reason: .userStart, status: "started")
+            self.emitListeningState(state: "started", sessionId: sessionId, reason: restarting ? .results : .userStart, status: "started")
         }
 
         session.onListeningStopped = { [weak self, weak session] in
             guard let self, let session, self.modernRecognitionSession === session, self.activeSessionId == sessionId else {
+                return
+            }
+
+            if self.pendingContinuousRestartSessionId == sessionId {
+                self.modernRecognitionSession = nil
+                self.scheduleContinuousRestart(sessionId: sessionId)
                 return
             }
 
@@ -408,16 +451,25 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             self.latestPartialMatches = matches
-            if options.partialResults {
-                self.notifyListeners("partialResults", data: ["matches": matches])
-            } else if isFinal {
-                let startCall = self.activeCall
-                self.activeCall = nil
-                startCall?.resolve(["matches": matches])
-            }
 
             if isFinal {
+                if self.prepareContinuousRestartIfNeeded(matches: matches, sessionId: sessionId) {
+                    return
+                }
+
+                if options.partialResults {
+                    self.emitPartialResultEvent(
+                        matches: matches,
+                        includeAccumulatedText: !self.accumulatedTranscriptText().isEmpty
+                    )
+                } else {
+                    let startCall = self.activeCall
+                    self.activeCall = nil
+                    startCall?.resolve(["matches": matches])
+                }
                 self.pendingStopReason = self.pendingStopReason ?? .results
+            } else if options.partialResults {
+                self.emitPartialResultEvent(matches: matches)
             }
         }
 
@@ -436,12 +488,12 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
             do {
                 try await session.start()
-                if options.partialResults {
+                if options.partialResults, let call {
                     call.resolve()
                     self.activeCall = nil
                 }
             } catch {
-                call.reject(error.localizedDescription)
+                call?.reject(error.localizedDescription)
                 self.emitErrorEvent(code: "MODERN_START_FAILED", message: error.localizedDescription, sessionId: sessionId)
                 self.activeCall = nil
                 self.finishSessionIfNeeded(sessionId: sessionId, reason: .error, errorCode: "MODERN_START_FAILED")
@@ -489,19 +541,29 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         currentOptions = nil
         pendingStopReason = nil
         emittedStoppingSessionId = nil
+        cancelPendingContinuousRestart()
 
-        if #available(iOS 26.0, *), let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
-            modernRecognitionSession = nil
-            if !sessionAlreadyStopped {
-                Task { @MainActor in
-                    await modernSession.stop()
+        if #available(iOS 26.0, *),
+           let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession,
+           !sessionAlreadyStopped {
+            Task { @MainActor in
+                await modernSession.stop()
+                if self.modernRecognitionSession === modernSession {
+                    self.modernRecognitionSession = nil
                 }
+                self.finalizeFinishedSession(sessionId: sessionId, reason: reason, errorCode: errorCode)
             }
+            return
         }
 
-        clearLegacyRecognitionResources()
-        notifyListeners("readyForNextSession", data: ["sessionId": sessionId])
-        emitListeningState(state: "stopped", sessionId: sessionId, reason: reason, errorCode: errorCode, status: "stopped")
+        if #available(iOS 26.0, *),
+           let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession,
+           sessionAlreadyStopped,
+           modernRecognitionSession === modernSession {
+            modernRecognitionSession = nil
+        }
+
+        finalizeFinishedSession(sessionId: sessionId, reason: reason, errorCode: errorCode)
     }
 
     private func rejectPendingStartCallIfNeeded(message: String) {
@@ -515,6 +577,10 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func handleRecognitionError(_ error: Error, sessionId: Int) {
         guard activeSessionId == sessionId else {
+            return
+        }
+
+        if pendingContinuousRestartSessionId == sessionId, pendingStopReason == nil {
             return
         }
 
@@ -535,6 +601,145 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             matches.append(transcription.formattedString)
         }
         return matches
+    }
+
+    private func finalizeFinishedSession(sessionId: Int, reason: ListeningReason, errorCode: String?) {
+        clearLegacyRecognitionResources()
+        resetContinuousPTTState()
+        notifyListeners("readyForNextSession", data: ["sessionId": sessionId])
+        emitListeningState(state: "stopped", sessionId: sessionId, reason: reason, errorCode: errorCode, status: "stopped")
+    }
+
+    private func prepareContinuousRestartIfNeeded(matches: [String], sessionId: Int) -> Bool {
+        guard shouldRestartContinuousPTT(sessionId: sessionId) else {
+            return false
+        }
+
+        if let text = matches.first?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            appendToAccumulatedTranscript(text)
+        }
+
+        pendingContinuousRestartSessionId = sessionId
+        emitPartialResultEvent(matches: matches, isRestarting: true)
+        latestPartialMatches = []
+        return true
+    }
+
+    private func shouldRestartContinuousPTT(sessionId: Int) -> Bool {
+        activeSessionId == sessionId &&
+            currentOptions?.continuousPTT == true &&
+            pttButtonHeld &&
+            pendingStopReason == nil
+    }
+
+    private func scheduleContinuousRestart(sessionId: Int) {
+        guard activeSessionId == sessionId, let options = currentOptions else {
+            pendingContinuousRestartSessionId = nil
+            return
+        }
+
+        cancelPendingContinuousRestart()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+            guard self.pendingContinuousRestartSessionId == sessionId,
+                  self.shouldRestartContinuousPTT(sessionId: sessionId)
+            else {
+                self.pendingContinuousRestartSessionId = nil
+                return
+            }
+
+            self.pendingContinuousRestartSessionId = nil
+            self.beginRecognition(call: nil, options: options, sessionId: sessionId, restarting: true)
+        }
+
+        continuousRestartWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + continuousRestartDelay, execute: workItem)
+    }
+
+    private func cancelPendingContinuousRestart() {
+        continuousRestartWorkItem?.cancel()
+        continuousRestartWorkItem = nil
+    }
+
+    private func resetContinuousPTTState() {
+        cancelPendingContinuousRestart()
+        pendingContinuousRestartSessionId = nil
+        accumulatedTranscript = ""
+        latestPartialMatches = []
+    }
+
+    private func emitPartialResultEvent(
+        matches: [String],
+        isRestarting: Bool = false,
+        forced: Bool = false,
+        includeAccumulatedText: Bool = false
+    ) {
+        var payload: [String: Any] = [:]
+
+        if !matches.isEmpty {
+            payload["matches"] = matches
+        }
+
+        if includeAccumulatedText {
+            let text = currentTranscriptText(currentMatches: matches)
+            if !text.isEmpty {
+                payload["accumulatedText"] = text
+            }
+        } else {
+            let accumulated = accumulatedTranscriptText()
+            if !accumulated.isEmpty {
+                payload["accumulated"] = accumulated
+            }
+        }
+
+        if isRestarting {
+            payload["isRestarting"] = true
+        }
+
+        if forced {
+            payload["forced"] = true
+        }
+
+        guard !payload.isEmpty else {
+            return
+        }
+
+        notifyListeners("partialResults", data: payload)
+    }
+
+    private func appendToAccumulatedTranscript(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+
+        if accumulatedTranscript.isEmpty {
+            accumulatedTranscript = trimmed
+        } else {
+            accumulatedTranscript += " " + trimmed
+        }
+    }
+
+    private func accumulatedTranscriptText() -> String {
+        accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func currentTranscriptText(currentMatches: [String]? = nil) -> String {
+        let accumulated = accumulatedTranscriptText()
+        let current = (currentMatches ?? latestPartialMatches)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if accumulated.isEmpty {
+            return current
+        }
+        if current.isEmpty {
+            return accumulated
+        }
+        return accumulated + " " + current
     }
 
     private func emitListeningState(

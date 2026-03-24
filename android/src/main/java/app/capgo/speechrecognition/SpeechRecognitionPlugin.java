@@ -743,15 +743,16 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 }
 
                 state = ListeningState.IDLE;
-                if (startCallToReject != null) {
-                    startCallToReject.reject("Recognition stopped before final results were produced.");
-                }
                 if (emitReady) {
                     notifyListeners(READY_FOR_NEXT_SESSION_EVENT, new JSObject().put("sessionId", finishedSessionId));
                 }
                 emitListeningState("stopped", finishedSessionId, reason, errorCode, "stopped");
             } finally {
                 lock.unlock();
+            }
+
+            if (startCallToReject != null) {
+                startCallToReject.reject("Recognition stopped before final results were produced.");
             }
         });
     }
@@ -1087,7 +1088,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 lock.lock();
                 JSArray matchesJSON = new JSArray(matches);
                 JSONArray nextPartialResults = new JSONArray(matches);
-                if (!previousPartialResults.equals(nextPartialResults)) {
+                if (!previousPartialResults.toString().equals(nextPartialResults.toString())) {
                     previousPartialResults = nextPartialResults;
                     payload = new JSObject();
                     payload.put("matches", matchesJSON);

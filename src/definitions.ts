@@ -67,8 +67,7 @@ export interface SpeechRecognitionStartOptions {
   /**
    * EXPERIMENTAL: Keep a PTT session alive across silence by restarting recognition while the button stays held.
    *
-   * This restart behavior is currently implemented on Android inline recognition.
-   * On iOS, `setPTTState()` and `forceStop()` are available, but automatic silence restarts are not.
+   * This restart behavior is implemented for Android inline recognition and iOS native recognition.
    */
   continuousPTT?: boolean;
 }
@@ -268,7 +267,7 @@ export interface SpeechRecognitionPlugin {
   /**
    * Updates the current push-to-talk button state.
    *
-   * Use this together with `continuousPTT` on Android or with a custom hold-to-talk flow on iOS.
+   * Use this together with `continuousPTT` or with a custom hold-to-talk flow.
    */
   setPTTState(options: PTTStateOptions): Promise<void>;
   /**

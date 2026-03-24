@@ -141,6 +141,22 @@ Stay on the default path if:
 - Android uses the on-device recognizer only in inline mode. `popup: true` keeps using the system dialog and is not compatible with `useOnDeviceRecognition`.
 - On Android, a supported on-device language may require a model download before recognition can begin.
 
+## Push-to-talk and session events
+
+This plugin also supports a push-to-talk oriented flow built around three APIs:
+
+- `setPTTState({ held })` lets your UI tell the plugin when the button is pressed or released.
+- `forceStop()` stops the active session immediately and emits the last cached partial result with `forced: true` when available.
+- `getLastPartialResult()` lets you read back the latest cached transcript at any point.
+
+`continuousPTT` is the experimental Android-only mode that auto-restarts recognition across silence while the button stays held. On iOS, the same PTT API surface is available for hold/release flows, but automatic silence restarts are not enabled yet.
+
+The plugin also emits deterministic session lifecycle events so UIs can react cleanly:
+
+- `listeningState` now carries `state`, `sessionId`, `reason`, and optional `errorCode` in addition to the legacy `status`.
+- `error` is emitted for every native recognizer error instead of relying only on promise rejections.
+- `readyForNextSession` signals when native resources are torn down and the plugin is ready for another start.
+
 ### iOS usage descriptions
 
 Add the following keys to your app `Info.plist`:

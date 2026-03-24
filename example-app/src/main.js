@@ -18,12 +18,30 @@ const refs = {
   requestPermission: document.getElementById('request-permission'),
   startListening: document.getElementById('start-listening'),
   stopListening: document.getElementById('stop-listening'),
+  // PTT refs
+  pttMode: document.getElementById('ptt-mode'),
+  continuousPTT: document.getElementById('continuous-ptt'),
+  pttControls: document.getElementById('ptt-controls'),
+  pttButton: document.getElementById('ptt-button'),
+  pttState: document.getElementById('ptt-state'),
+  pttStatusContainer: document.getElementById('ptt-status-container'),
+  accumulatedResults: document.getElementById('accumulated-results'),
+  accumulatedText: document.getElementById('accumulated-text'),
 };
 
 let partialListener;
 let listeningListener;
 let segmentListener;
 let segmentedSessionListener;
+let readyListener;
+
+// PTT mode state
+let pttModeEnabled = false;
+let isPTTHeld = false;
+let pttTransitionId = 0;
+let pttTransitionInFlight = false;
+let keyboardPTTActive = false;
+let readyWaiters = [];
 
 const formatTime = () => new Date().toLocaleTimeString();
 
@@ -36,7 +54,7 @@ function appendEvent(label, detail) {
   body.textContent = detail ? `${label}: ${detail}` : label;
   entry.appendChild(time);
   entry.appendChild(body);
-  if (refs.eventLog.firstChild?.classList.contains('muted')) {
+  if (refs.eventLog.firstChild?.classList?.contains('muted')) {
     refs.eventLog.innerHTML = '';
   }
   refs.eventLog.prepend(entry);
@@ -80,11 +98,68 @@ function syncListeningState(status) {
   refs.listening.textContent = active ? 'yes' : 'no';
 }
 
+function nextPTTTransitionId() {
+  pttTransitionId += 1;
+  return pttTransitionId;
+}
+
+function isCurrentPTTTransition(id) {
+  return pttTransitionId === id;
+}
+
+function flushReadyWaiters() {
+  const waiters = readyWaiters;
+  readyWaiters = [];
+  waiters.forEach((resolve) => resolve());
+}
+
+function waitForReadyForNextSession(timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      readyWaiters = readyWaiters.filter((waiter) => waiter !== onReady);
+      resolve();
+    }, timeoutMs);
+
+    const onReady = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+
+    readyWaiters.push(onReady);
+  });
+}
+
+function setPTTButtonState(held) {
+  refs.pttButton.classList.toggle('active', held);
+  refs.pttState.textContent = held ? 'held' : 'released';
+}
+
+function isPTTActivationKey(event) {
+  return event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter';
+}
+
+function togglePTTMode(enabled) {
+  pttModeEnabled = enabled;
+  refs.pttControls.classList.toggle('hidden', !enabled);
+  refs.startListening.parentElement.classList.toggle('hidden', enabled);
+  refs.pttStatusContainer.classList.toggle('hidden', !enabled);
+  refs.continuousPTT.disabled = !enabled;
+  if (!enabled) refs.continuousPTT.checked = false;
+  appendEvent('PTT Mode', enabled ? 'enabled' : 'disabled');
+}
+
 async function ensureListeners() {
   if (!partialListener) {
     partialListener = await SpeechRecognition.addListener('partialResults', (event) => {
       const matches = event.matches?.join(' | ') ?? '(empty)';
-      appendEvent('partialResults', matches);
+      if (event.accumulated) {
+        refs.accumulatedText.textContent = event.accumulated;
+        refs.accumulatedResults.classList.remove('hidden');
+        const detail = event.isRestarting ? `${matches} [restarting...]` : matches;
+        appendEvent('partialResults', `${detail} (accumulated: ${event.accumulated})`);
+      } else {
+        appendEvent('partialResults', matches);
+      }
     });
   }
 
@@ -107,6 +182,13 @@ async function ensureListeners() {
       appendEvent('endOfSegmentedSession', 'Segment session ended');
     });
   }
+
+  if (!readyListener) {
+    readyListener = await SpeechRecognition.addListener('readyForNextSession', (event) => {
+      appendEvent('readyForNextSession', `session ${event.sessionId}`);
+      flushReadyWaiters();
+    });
+  }
 }
 
 function parseOptions() {
@@ -121,6 +203,7 @@ function parseOptions() {
     popup: refs.popup.checked,
     addPunctuation: refs.addPunctuation.checked,
     allowForSilence,
+    continuousPTT: pttModeEnabled && refs.continuousPTT.checked,
   };
   return options;
 }
@@ -150,12 +233,111 @@ async function stopListening() {
   }
 }
 
+async function handlePTTPress() {
+  if (isPTTHeld || pttTransitionInFlight) return;
+  const transitionId = nextPTTTransitionId();
+  pttTransitionInFlight = true;
+  isPTTHeld = true;
+  setPTTButtonState(true);
+  refs.accumulatedResults.classList.add('hidden');
+  refs.accumulatedText.textContent = '';
+
+  try {
+    await SpeechRecognition.setPTTState({ held: true });
+    if (!isCurrentPTTTransition(transitionId)) return;
+    appendEvent('setPTTState()', 'held: true');
+    await ensureListeners();
+    if (!isCurrentPTTTransition(transitionId)) return;
+    const options = parseOptions();
+    appendEvent('start() [PTT]', JSON.stringify(options));
+    await SpeechRecognition.start(options);
+    if (!isCurrentPTTTransition(transitionId)) return;
+  } catch (error) {
+    if (!isCurrentPTTTransition(transitionId)) return;
+    appendEvent('PTT start error', error?.message ?? String(error));
+    isPTTHeld = false;
+    setPTTButtonState(false);
+  } finally {
+    if (isCurrentPTTTransition(transitionId)) {
+      pttTransitionInFlight = false;
+    }
+  }
+}
+
+async function handlePTTRelease() {
+  if (!isPTTHeld && !pttTransitionInFlight) return;
+  const transitionId = nextPTTTransitionId();
+  pttTransitionInFlight = true;
+  isPTTHeld = false;
+  setPTTButtonState(false);
+
+  try {
+    await SpeechRecognition.setPTTState({ held: false });
+    if (!isCurrentPTTTransition(transitionId)) return;
+    appendEvent('setPTTState()', 'held: false');
+    appendEvent('forceStop()', 'requesting...');
+    await SpeechRecognition.forceStop({ timeout: 1500 });
+    if (!isCurrentPTTTransition(transitionId)) return;
+    appendEvent('forceStop()', 'completed');
+    await waitForReadyForNextSession();
+    if (!isCurrentPTTTransition(transitionId)) return;
+    const lastResult = await SpeechRecognition.getLastPartialResult();
+    if (!isCurrentPTTTransition(transitionId)) return;
+    if (lastResult.available) {
+      appendEvent('getLastPartialResult()', lastResult.text);
+    }
+  } catch (error) {
+    if (!isCurrentPTTTransition(transitionId)) return;
+    appendEvent('PTT stop error', error?.message ?? String(error));
+  } finally {
+    if (isCurrentPTTTransition(transitionId)) {
+      pttTransitionInFlight = false;
+    }
+  }
+}
+
 async function bootstrap() {
   refs.checkAvailability.addEventListener('click', updateAvailability);
   refs.checkPermission.addEventListener('click', updatePermissions);
   refs.requestPermission.addEventListener('click', requestPermissions);
   refs.startListening.addEventListener('click', startListening);
   refs.stopListening.addEventListener('click', stopListening);
+
+  // PTT mode toggle
+  refs.pttMode.addEventListener('change', (e) => togglePTTMode(e.target.checked));
+
+  // PTT button - mouse events
+  refs.pttButton.addEventListener('mousedown', handlePTTPress);
+  refs.pttButton.addEventListener('mouseup', handlePTTRelease);
+  refs.pttButton.addEventListener('mouseleave', handlePTTRelease);
+
+  // PTT button - touch events
+  refs.pttButton.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    handlePTTPress();
+  });
+  refs.pttButton.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    handlePTTRelease();
+  });
+  refs.pttButton.addEventListener('touchcancel', handlePTTRelease);
+  refs.pttButton.addEventListener('keydown', (event) => {
+    if (!isPTTActivationKey(event)) return;
+    event.preventDefault();
+    if (event.repeat || keyboardPTTActive) return;
+    keyboardPTTActive = true;
+    handlePTTPress();
+  });
+  refs.pttButton.addEventListener('keyup', (event) => {
+    if (!isPTTActivationKey(event)) return;
+    event.preventDefault();
+    keyboardPTTActive = false;
+    handlePTTRelease();
+  });
+  refs.pttButton.addEventListener('blur', () => {
+    keyboardPTTActive = false;
+    handlePTTRelease();
+  });
 
   await Promise.all([updateAvailability(), updatePermissions()]);
 }
@@ -167,4 +349,5 @@ window.addEventListener('beforeunload', () => {
   listeningListener?.remove();
   segmentListener?.remove();
   segmentedSessionListener?.remove();
+  readyListener?.remove();
 });

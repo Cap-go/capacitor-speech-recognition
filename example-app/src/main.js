@@ -18,12 +18,25 @@ const refs = {
   requestPermission: document.getElementById('request-permission'),
   startListening: document.getElementById('start-listening'),
   stopListening: document.getElementById('stop-listening'),
+  // PTT refs
+  pttMode: document.getElementById('ptt-mode'),
+  continuousPTT: document.getElementById('continuous-ptt'),
+  pttControls: document.getElementById('ptt-controls'),
+  pttButton: document.getElementById('ptt-button'),
+  pttState: document.getElementById('ptt-state'),
+  pttStatusContainer: document.getElementById('ptt-status-container'),
+  accumulatedResults: document.getElementById('accumulated-results'),
+  accumulatedText: document.getElementById('accumulated-text'),
 };
 
 let partialListener;
 let listeningListener;
 let segmentListener;
 let segmentedSessionListener;
+
+// PTT mode state
+let pttModeEnabled = false;
+let isPTTHeld = false;
 
 const formatTime = () => new Date().toLocaleTimeString();
 
@@ -36,7 +49,7 @@ function appendEvent(label, detail) {
   body.textContent = detail ? `${label}: ${detail}` : label;
   entry.appendChild(time);
   entry.appendChild(body);
-  if (refs.eventLog.firstChild?.classList.contains('muted')) {
+  if (refs.eventLog.firstChild?.classList?.contains('muted')) {
     refs.eventLog.innerHTML = '';
   }
   refs.eventLog.prepend(entry);
@@ -80,11 +93,28 @@ function syncListeningState(status) {
   refs.listening.textContent = active ? 'yes' : 'no';
 }
 
+function togglePTTMode(enabled) {
+  pttModeEnabled = enabled;
+  refs.pttControls.classList.toggle('hidden', !enabled);
+  refs.startListening.parentElement.classList.toggle('hidden', enabled);
+  refs.pttStatusContainer.classList.toggle('hidden', !enabled);
+  refs.continuousPTT.disabled = !enabled;
+  if (!enabled) refs.continuousPTT.checked = false;
+  appendEvent('PTT Mode', enabled ? 'enabled' : 'disabled');
+}
+
 async function ensureListeners() {
   if (!partialListener) {
     partialListener = await SpeechRecognition.addListener('partialResults', (event) => {
       const matches = event.matches?.join(' | ') ?? '(empty)';
-      appendEvent('partialResults', matches);
+      if (event.accumulated) {
+        refs.accumulatedText.textContent = event.accumulated;
+        refs.accumulatedResults.classList.remove('hidden');
+        const detail = event.isRestarting ? `${matches} [restarting...]` : matches;
+        appendEvent('partialResults', `${detail} (accumulated: ${event.accumulated})`);
+      } else {
+        appendEvent('partialResults', matches);
+      }
     });
   }
 
@@ -121,6 +151,7 @@ function parseOptions() {
     popup: refs.popup.checked,
     addPunctuation: refs.addPunctuation.checked,
     allowForSilence,
+    continuousPTT: pttModeEnabled && refs.continuousPTT.checked,
   };
   return options;
 }
@@ -150,12 +181,73 @@ async function stopListening() {
   }
 }
 
+async function handlePTTPress() {
+  if (isPTTHeld) return;
+  isPTTHeld = true;
+  refs.pttButton.classList.add('active');
+  refs.pttState.textContent = 'held';
+  refs.accumulatedResults.classList.add('hidden');
+  refs.accumulatedText.textContent = '';
+
+  try {
+    await SpeechRecognition.setPTTState({ held: true });
+    appendEvent('setPTTState()', 'held: true');
+    await ensureListeners();
+    const options = parseOptions();
+    appendEvent('start() [PTT]', JSON.stringify(options));
+    await SpeechRecognition.start(options);
+  } catch (error) {
+    appendEvent('PTT start error', error?.message ?? String(error));
+    handlePTTRelease();
+  }
+}
+
+async function handlePTTRelease() {
+  if (!isPTTHeld) return;
+  isPTTHeld = false;
+  refs.pttButton.classList.remove('active');
+  refs.pttState.textContent = 'released';
+
+  try {
+    await SpeechRecognition.setPTTState({ held: false });
+    appendEvent('setPTTState()', 'held: false');
+    appendEvent('forceStop()', 'requesting...');
+    await SpeechRecognition.forceStop({ timeout: 1500 });
+    appendEvent('forceStop()', 'completed');
+    const lastResult = await SpeechRecognition.getLastPartialResult();
+    if (lastResult.available) {
+      appendEvent('getLastPartialResult()', lastResult.text);
+    }
+  } catch (error) {
+    appendEvent('PTT stop error', error?.message ?? String(error));
+  }
+}
+
 async function bootstrap() {
   refs.checkAvailability.addEventListener('click', updateAvailability);
   refs.checkPermission.addEventListener('click', updatePermissions);
   refs.requestPermission.addEventListener('click', requestPermissions);
   refs.startListening.addEventListener('click', startListening);
   refs.stopListening.addEventListener('click', stopListening);
+
+  // PTT mode toggle
+  refs.pttMode.addEventListener('change', (e) => togglePTTMode(e.target.checked));
+
+  // PTT button - mouse events
+  refs.pttButton.addEventListener('mousedown', handlePTTPress);
+  refs.pttButton.addEventListener('mouseup', handlePTTRelease);
+  refs.pttButton.addEventListener('mouseleave', handlePTTRelease);
+
+  // PTT button - touch events
+  refs.pttButton.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    handlePTTPress();
+  });
+  refs.pttButton.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    handlePTTRelease();
+  });
+  refs.pttButton.addEventListener('touchcancel', handlePTTRelease);
 
   await Promise.all([updateAvailability(), updatePermissions()]);
 }

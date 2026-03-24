@@ -28,6 +28,10 @@
             <span>Listening</span>
             <strong id="listening">no</strong>
           </div>
+          <div id="ptt-status-container" class="hidden">
+            <span>PTT State</span>
+            <strong id="ptt-state">released</strong>
+          </div>
         </div>
         <div class="button-row">
           <button id="check-availability">Check Availability</button>
@@ -67,10 +71,36 @@
             <input id="add-punctuation" type="checkbox" />
             <span>Add punctuation (iOS 16+)</span>
           </label>
+
+          <div class="form-divider">
+            <span>PTT Mode (Android)</span>
+          </div>
+
+          <label class="checkbox">
+            <input id="ptt-mode" type="checkbox" />
+            <span>Enable PTT mode</span>
+          </label>
+
+          <label class="checkbox">
+            <input id="continuous-ptt" type="checkbox" disabled />
+            <span>Continue on silence (experimental)</span>
+          </label>
         </div>
         <div class="button-row">
           <button id="start-listening">Start Listening</button>
           <button id="stop-listening" class="ghost">Stop</button>
+        </div>
+
+        <div id="ptt-controls" class="ptt-controls hidden">
+          <p class="ptt-instructions">Hold the button to record. Release to stop.</p>
+          <button id="ptt-button" class="ptt-button">
+            <span class="ptt-icon">🎤</span>
+            <span class="ptt-label">Hold to Talk</span>
+          </button>
+          <div id="accumulated-results" class="accumulated-results hidden">
+            <strong>Accumulated:</strong>
+            <span id="accumulated-text"></span>
+          </div>
         </div>
       </section>
 

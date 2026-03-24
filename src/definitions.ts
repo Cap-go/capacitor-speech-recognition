@@ -64,6 +64,13 @@ export interface SpeechRecognitionStartOptions {
    * Required to be greater than zero and currently supported on Android only.
    */
   allowForSilence?: number;
+  /**
+   * EXPERIMENTAL: Keep a PTT session alive across silence by restarting recognition while the button stays held.
+   *
+   * This restart behavior is currently implemented on Android inline recognition.
+   * On iOS, `setPTTState()` and `forceStop()` are available, but automatic silence restarts are not.
+   */
+  continuousPTT?: boolean;
 }
 
 /**
@@ -71,6 +78,22 @@ export interface SpeechRecognitionStartOptions {
  */
 export interface SpeechRecognitionPartialResultEvent {
   matches: string[];
+  /**
+   * Accumulated transcription from earlier continuous PTT cycles.
+   */
+  accumulated?: string;
+  /**
+   * Final accumulated text including the current result.
+   */
+  accumulatedText?: string;
+  /**
+   * `true` when the plugin is restarting recognition inside a continuous PTT session.
+   */
+  isRestarting?: boolean;
+  /**
+   * `true` when the payload was emitted by `forceStop()`.
+   */
+  forced?: boolean;
 }
 
 /**
@@ -81,10 +104,58 @@ export interface SpeechRecognitionSegmentResultEvent {
 }
 
 /**
+ * Finite state values for the recognition session lifecycle.
+ */
+export type ListeningFiniteState = 'startingListening' | 'started' | 'stoppingListening' | 'stopped';
+
+/**
+ * Why a listening state transition happened.
+ */
+export type ListeningReason = 'userStart' | 'userStop' | 'forceStop' | 'results' | 'silence' | 'error' | 'unknown';
+
+/**
  * Raised when the listening state changes.
+ *
+ * The original `status` field is preserved for backward compatibility and is present
+ * on the binary `started` / `stopped` states.
  */
 export interface SpeechRecognitionListeningEvent {
-  status: 'started' | 'stopped';
+  /**
+   * Finite state of the recognition session.
+   */
+  state?: ListeningFiniteState;
+  /**
+   * Unique identifier for the current listening session.
+   */
+  sessionId?: number;
+  /**
+   * Why this state transition occurred.
+   */
+  reason?: ListeningReason;
+  /**
+   * Error code when the transition is caused by an error.
+   */
+  errorCode?: string;
+  /**
+   * Backward-compatible binary state used by earlier releases.
+   */
+  status?: 'started' | 'stopped';
+}
+
+/**
+ * Raised whenever native recognition reports an error.
+ */
+export interface SpeechRecognitionErrorEvent {
+  code: string;
+  message: string;
+  sessionId: number;
+}
+
+/**
+ * Emitted after native resources have been torn down and the plugin is ready for another session.
+ */
+export interface SpeechRecognitionReadyEvent {
+  sessionId: number;
 }
 
 export interface SpeechRecognitionAvailability {
@@ -101,6 +172,48 @@ export interface SpeechRecognitionLanguages {
 
 export interface SpeechRecognitionListening {
   listening: boolean;
+}
+
+/**
+ * Options for {@link SpeechRecognitionPlugin.forceStop}.
+ */
+export interface ForceStopOptions {
+  /**
+   * Android only: timeout in milliseconds before forcing stop via destroy/recreate.
+   *
+   * On iOS, the current session is stopped immediately and this value is ignored.
+   *
+   * Defaults to `1500`.
+   */
+  timeout?: number;
+}
+
+/**
+ * Result from {@link SpeechRecognitionPlugin.getLastPartialResult}.
+ */
+export interface LastPartialResult {
+  /**
+   * Whether a partial result is currently cached.
+   */
+  available: boolean;
+  /**
+   * The most recent transcript text known to the native recognizer.
+   */
+  text: string;
+  /**
+   * All current match alternatives when available.
+   */
+  matches?: string[];
+}
+
+/**
+ * Options for {@link SpeechRecognitionPlugin.setPTTState}.
+ */
+export interface PTTStateOptions {
+  /**
+   * Whether the PTT button is currently held.
+   */
+  held: boolean;
 }
 
 export interface SpeechRecognitionPlugin {
@@ -128,7 +241,7 @@ export interface SpeechRecognitionPlugin {
    * Begins capturing audio and transcribing speech.
    *
    * When `partialResults` is `true`, the returned promise resolves immediately and updates are
-   * streamed through the `partialResults` listener until {@link stop} is called.
+   * streamed through the `partialResults` listener until the session ends.
    *
    * The default path keeps the legacy recognizer behavior for backward compatibility.
    * Pass `useOnDeviceRecognition: true` only after checking
@@ -139,6 +252,25 @@ export interface SpeechRecognitionPlugin {
    * Stops listening and tears down native resources.
    */
   stop(): Promise<void>;
+  /**
+   * Force stops the current session.
+   *
+   * On Android, this first tries a normal stop and then falls back to destroy/recreate after `timeout`.
+   * On iOS, the current session is stopped immediately.
+   *
+   * If a partial transcript is cached, it is emitted through the `partialResults` listener with `forced: true`.
+   */
+  forceStop(options?: ForceStopOptions): Promise<void>;
+  /**
+   * Gets the last cached partial transcription result.
+   */
+  getLastPartialResult(): Promise<LastPartialResult>;
+  /**
+   * Updates the current push-to-talk button state.
+   *
+   * Use this together with `continuousPTT` on Android or with a custom hold-to-talk flow on iOS.
+   */
+  setPTTState(options: PTTStateOptions): Promise<void>;
   /**
    * Gets the locales supported by the underlying recognizer.
    *
@@ -187,6 +319,17 @@ export interface SpeechRecognitionPlugin {
   addListener(
     eventName: 'listeningState',
     listenerFunc: (event: SpeechRecognitionListeningEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Listen for recognition errors.
+   */
+  addListener(eventName: 'error', listenerFunc: (event: SpeechRecognitionErrorEvent) => void): Promise<PluginListenerHandle>;
+  /**
+   * Listen for the recognizer becoming ready for another session.
+   */
+  addListener(
+    eventName: 'readyForNextSession',
+    listenerFunc: (event: SpeechRecognitionReadyEvent) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * Removes every registered listener.

@@ -1,6 +1,9 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  ForceStopOptions,
+  LastPartialResult,
+  PTTStateOptions,
   SpeechRecognitionAvailability,
   SpeechRecognitionLanguages,
   SpeechRecognitionListening,
@@ -24,6 +27,18 @@ export class SpeechRecognitionWeb extends WebPlugin implements SpeechRecognition
   }
 
   stop(): Promise<void> {
+    throw this.unimplemented('Speech recognition is not available on the web.');
+  }
+
+  forceStop(_options?: ForceStopOptions): Promise<void> {
+    throw this.unimplemented('Speech recognition is not available on the web.');
+  }
+
+  async getLastPartialResult(): Promise<LastPartialResult> {
+    return { available: false, text: '' };
+  }
+
+  setPTTState(_options: PTTStateOptions): Promise<void> {
     throw this.unimplemented('Speech recognition is not available on the web.');
   }
 

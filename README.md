@@ -156,6 +156,9 @@ Add the following keys to your app `Info.plist`:
 * [`isOnDeviceRecognitionAvailable(...)`](#isondevicerecognitionavailable)
 * [`start(...)`](#start)
 * [`stop()`](#stop)
+* [`forceStop(...)`](#forcestop)
+* [`getLastPartialResult()`](#getlastpartialresult)
+* [`setPTTState(...)`](#setpttstate)
 * [`getSupportedLanguages()`](#getsupportedlanguages)
 * [`isListening()`](#islistening)
 * [`checkPermissions()`](#checkpermissions)
@@ -165,6 +168,8 @@ Add the following keys to your app `Info.plist`:
 * [`addListener('segmentResults', ...)`](#addlistenersegmentresults-)
 * [`addListener('partialResults', ...)`](#addlistenerpartialresults-)
 * [`addListener('listeningState', ...)`](#addlistenerlisteningstate-)
+* [`addListener('error', ...)`](#addlistenererror-)
+* [`addListener('readyForNextSession', ...)`](#addlistenerreadyfornextsession-)
 * [`removeAllListeners()`](#removealllisteners)
 * [Interfaces](#interfaces)
 * [Type Aliases](#type-aliases)
@@ -223,7 +228,7 @@ start(options?: SpeechRecognitionStartOptions | undefined) => Promise<SpeechReco
 Begins capturing audio and transcribing speech.
 
 When `partialResults` is `true`, the returned promise resolves immediately and updates are
-streamed through the `partialResults` listener until {@link stop} is called.
+streamed through the `partialResults` listener until the session ends.
 
 The default path keeps the legacy recognizer behavior for backward compatibility.
 Pass `useOnDeviceRecognition: true` only after checking
@@ -245,6 +250,56 @@ stop() => Promise<void>
 ```
 
 Stops listening and tears down native resources.
+
+--------------------
+
+
+### forceStop(...)
+
+```typescript
+forceStop(options?: ForceStopOptions | undefined) => Promise<void>
+```
+
+Force stops the current session.
+
+On Android, this first tries a normal stop and then falls back to destroy/recreate after `timeout`.
+On iOS, the current session is stopped immediately.
+
+If a partial transcript is cached, it is emitted through the `partialResults` listener with `forced: true`.
+
+| Param         | Type                                                          |
+| ------------- | ------------------------------------------------------------- |
+| **`options`** | <code><a href="#forcestopoptions">ForceStopOptions</a></code> |
+
+--------------------
+
+
+### getLastPartialResult()
+
+```typescript
+getLastPartialResult() => Promise<LastPartialResult>
+```
+
+Gets the last cached partial transcription result.
+
+**Returns:** <code>Promise&lt;<a href="#lastpartialresult">LastPartialResult</a>&gt;</code>
+
+--------------------
+
+
+### setPTTState(...)
+
+```typescript
+setPTTState(options: PTTStateOptions) => Promise<void>
+```
+
+Updates the current push-to-talk button state.
+
+Use this together with `continuousPTT` on Android or with a custom hold-to-talk flow on iOS.
+
+| Param         | Type                                                        |
+| ------------- | ----------------------------------------------------------- |
+| **`options`** | <code><a href="#pttstateoptions">PTTStateOptions</a></code> |
 
 --------------------
 
@@ -390,6 +445,42 @@ Listen for changes to the native listening state.
 --------------------
 
 
+### addListener('error', ...)
+
+```typescript
+addListener(eventName: 'error', listenerFunc: (event: SpeechRecognitionErrorEvent) => void) => Promise<PluginListenerHandle>
+```
+
+Listen for recognition errors.
+
+| Param              | Type                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| **`eventName`**    | <code>'error'</code>                                                                                    |
+| **`listenerFunc`** | <code>(event: <a href="#speechrecognitionerrorevent">SpeechRecognitionErrorEvent</a>) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
+### addListener('readyForNextSession', ...)
+
+```typescript
+addListener(eventName: 'readyForNextSession', listenerFunc: (event: SpeechRecognitionReadyEvent) => void) => Promise<PluginListenerHandle>
+```
+
+Listen for the recognizer becoming ready for another session.
+
+| Param              | Type                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| **`eventName`**    | <code>'readyForNextSession'</code>                                                                      |
+| **`listenerFunc`** | <code>(event: <a href="#speechrecognitionreadyevent">SpeechRecognitionReadyEvent</a>) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
 ### removeAllListeners()
 
 ```typescript
@@ -425,6 +516,7 @@ Configure how the recognizer behaves when calling {@link SpeechRecognitionPlugin
 | **`addPunctuation`**         | <code>boolean</code> | Enables native punctuation handling where supported (iOS 16+).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **`useOnDeviceRecognition`** | <code>boolean</code> | Opt in to the platform's newer on-device recognition path when available. On iOS 26+, this uses Apple's `SpeechAnalyzer` / `SpeechTranscriber` pipeline. On recent Android versions, this uses the on-device `SpeechRecognizer` path. It is intentionally opt-in so existing apps keep the legacy flow unless they choose to roll out the new behavior. Use {@link SpeechRecognitionPlugin.isOnDeviceRecognitionAvailable} before enabling it in production. Platform SDK docs: iOS: [Speech](https://developer.apple.com/documentation/speech), [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer), [SpeechTranscriber](https://developer.apple.com/documentation/speech/speechtranscriber) Android: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer) Defaults to `false`. |
 | **`allowForSilence`**        | <code>number</code>  | Allow a number of milliseconds of silence before splitting the recognition session into segments. Required to be greater than zero and currently supported on Android only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **`continuousPTT`**          | <code>boolean</code> | EXPERIMENTAL: Keep a PTT session alive across silence by restarting recognition while the button stays held. This restart behavior is currently implemented on Android inline recognition. On iOS, `setPTTState()` and `forceStop()` are available, but automatic silence restarts are not.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 
 #### SpeechRecognitionMatches
@@ -432,6 +524,35 @@ Configure how the recognizer behaves when calling {@link SpeechRecognitionPlugin
 | Prop          | Type                  |
 | ------------- | --------------------- |
 | **`matches`** | <code>string[]</code> |
+
+
+#### ForceStopOptions
+
+Options for {@link SpeechRecognitionPlugin.forceStop}.
+
+| Prop          | Type                | Description                                                                                                                                                                       |
+| ------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`timeout`** | <code>number</code> | Android only: timeout in milliseconds before forcing stop via destroy/recreate. On iOS, the current session is stopped immediately and this value is ignored. Defaults to `1500`. |
+
+
+#### LastPartialResult
+
+Result from {@link SpeechRecognitionPlugin.getLastPartialResult}.
+
+| Prop            | Type                  | Description                                                     |
+| --------------- | --------------------- | --------------------------------------------------------------- |
+| **`available`** | <code>boolean</code>  | Whether a partial result is currently cached.                   |
+| **`text`**      | <code>string</code>   | The most recent transcript text known to the native recognizer. |
+| **`matches`**   | <code>string[]</code> | All current match alternatives when available.                  |
+
+
+#### PTTStateOptions
+
+Options for {@link SpeechRecognitionPlugin.setPTTState}.
+
+| Prop       | Type                 | Description                               |
+| ---------- | -------------------- | ----------------------------------------- |
+| **`held`** | <code>boolean</code> | Whether the PTT button is currently held. |
 
 
 #### SpeechRecognitionLanguages
@@ -480,18 +601,49 @@ Raised whenever a segmented result is produced (Android only).
 
 Raised whenever a partial transcription is produced.
 
-| Prop          | Type                  |
-| ------------- | --------------------- |
-| **`matches`** | <code>string[]</code> |
+| Prop                  | Type                  | Description                                                                       |
+| --------------------- | --------------------- | --------------------------------------------------------------------------------- |
+| **`matches`**         | <code>string[]</code> |                                                                                   |
+| **`accumulated`**     | <code>string</code>   | Accumulated transcription from earlier continuous PTT cycles.                     |
+| **`accumulatedText`** | <code>string</code>   | Final accumulated text including the current result.                              |
+| **`isRestarting`**    | <code>boolean</code>  | `true` when the plugin is restarting recognition inside a continuous PTT session. |
+| **`forced`**          | <code>boolean</code>  | `true` when the payload was emitted by `forceStop()`.                             |
 
 
 #### SpeechRecognitionListeningEvent
 
 Raised when the listening state changes.
 
-| Prop         | Type                                |
-| ------------ | ----------------------------------- |
-| **`status`** | <code>'started' \| 'stopped'</code> |
+The original `status` field is preserved for backward compatibility and is present
+on the binary `started` / `stopped` states.
+
+| Prop            | Type                                                                  | Description                                                |
+| --------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **`state`**     | <code><a href="#listeningfinitestate">ListeningFiniteState</a></code> | Finite state of the recognition session.                   |
+| **`sessionId`** | <code>number</code>                                                   | Unique identifier for the current listening session.       |
+| **`reason`**    | <code><a href="#listeningreason">ListeningReason</a></code>           | Why this state transition occurred.                        |
+| **`errorCode`** | <code>string</code>                                                   | Error code when the transition is caused by an error.      |
+| **`status`**    | <code>'started' \| 'stopped'</code>                                   | Backward-compatible binary state used by earlier releases. |
+
+
+#### SpeechRecognitionErrorEvent
+
+Raised whenever native recognition reports an error.
+
+| Prop            | Type                |
+| --------------- | ------------------- |
+| **`code`**      | <code>string</code> |
+| **`message`**   | <code>string</code> |
+| **`sessionId`** | <code>number</code> |
+
+
+#### SpeechRecognitionReadyEvent
+
+Emitted after native resources have been torn down and the plugin is ready for another session.
+
+| Prop            | Type                |
+| --------------- | ------------------- |
+| **`sessionId`** | <code>number</code> |
 
 
 ### Type Aliases
@@ -507,5 +659,19 @@ From T, pick a set of properties whose keys are in the union K
 #### PermissionState
 
 <code>'prompt' | 'prompt-with-rationale' | 'granted' | 'denied'</code>
+
+
+#### ListeningFiniteState
+
+Finite state values for the recognition session lifecycle.
+
+<code>'startingListening' | 'started' | 'stoppingListening' | 'stopped'</code>
+
+
+#### ListeningReason
+
+Why a listening state transition happened.
+
+<code>'userStart' | 'userStop' | 'forceStop' | 'results' | 'silence' | 'error' | 'unknown'</code>
 
 </docgen-api>

@@ -323,7 +323,10 @@ export interface SpeechRecognitionPlugin {
   /**
    * Listen for recognition errors.
    */
-  addListener(eventName: 'error', listenerFunc: (event: SpeechRecognitionErrorEvent) => void): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: 'error',
+    listenerFunc: (event: SpeechRecognitionErrorEvent) => void,
+  ): Promise<PluginListenerHandle>;
   /**
    * Listen for the recognizer becoming ready for another session.
    */

@@ -589,7 +589,11 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         if (call != null) {
                             call.reject("On-device recognition is not available for language: " + language);
                         }
-                        emitErrorEvent("UNSUPPORTED_LOCALE", "On-device recognition is not available for language: " + language, currentSessionId);
+                        emitErrorEvent(
+                            "UNSUPPORTED_LOCALE",
+                            "On-device recognition is not available for language: " + language,
+                            currentSessionId
+                        );
                         finishSession(currentSessionId, "error", "UNSUPPORTED_LOCALE");
                         return;
                     }
@@ -659,13 +663,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         );
     }
 
-    private void startInlineListening(
-        Intent intent,
-        boolean partialResults,
-        PluginCall call,
-        long currentSessionId,
-        boolean restarting
-    ) {
+    private void startInlineListening(Intent intent, boolean partialResults, PluginCall call, long currentSessionId, boolean restarting) {
         speechRecognizer.startListening(intent);
         listening(true);
         state = ListeningState.STARTED;
@@ -706,58 +704,56 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private void finishSession(long finishedSessionId, String explicitReason, String errorCode) {
-        handler.post(
-            () -> {
-                PluginCall startCallToReject = null;
-                boolean emitReady = true;
-                String reason;
+        handler.post(() -> {
+            PluginCall startCallToReject = null;
+            boolean emitReady = true;
+            String reason;
 
-                try {
-                    lock.lock();
-                    if (finishedSessionId != sessionId) {
-                        return;
-                    }
-
-                    reason = explicitReason != null ? explicitReason : (pendingStopReason != null ? pendingStopReason : "unknown");
-                    if (state != ListeningState.STOPPING) {
-                        state = ListeningState.STOPPING;
-                        emitListeningState("stoppingListening", finishedSessionId, reason, errorCode, null);
-                    }
-
-                    cancelPendingForceStopLocked();
-                    listening(false);
-                    if (activeStartCall != null && !lastPartialResults && ("userStop".equals(reason) || "forceStop".equals(reason))) {
-                        startCallToReject = activeStartCall;
-                    }
-                    activeStartCall = null;
-                    pendingStopReason = null;
-                    continuousPTTMode = false;
-                    forceStopped = false;
-                    resetPartialResultsCache();
-                    accumulatedResults = new StringBuilder();
-
-                    destroyCurrentRecognizerLocked();
-                    try {
-                        recreateIdleRecognizerLocked();
-                    } catch (Exception ex) {
-                        emitReady = false;
-                        Logger.error(TAG, "Failed to recreate recognizer", ex);
-                        emitErrorEvent("RECREATE_FAILED", ex.getMessage(), finishedSessionId);
-                    }
-
-                    state = ListeningState.IDLE;
-                    if (startCallToReject != null) {
-                        startCallToReject.reject("Recognition stopped before final results were produced.");
-                    }
-                    if (emitReady) {
-                        notifyListeners(READY_FOR_NEXT_SESSION_EVENT, new JSObject().put("sessionId", finishedSessionId));
-                    }
-                    emitListeningState("stopped", finishedSessionId, reason, errorCode, "stopped");
-                } finally {
-                    lock.unlock();
+            try {
+                lock.lock();
+                if (finishedSessionId != sessionId) {
+                    return;
                 }
+
+                reason = explicitReason != null ? explicitReason : (pendingStopReason != null ? pendingStopReason : "unknown");
+                if (state != ListeningState.STOPPING) {
+                    state = ListeningState.STOPPING;
+                    emitListeningState("stoppingListening", finishedSessionId, reason, errorCode, null);
+                }
+
+                cancelPendingForceStopLocked();
+                listening(false);
+                if (activeStartCall != null && !lastPartialResults && ("userStop".equals(reason) || "forceStop".equals(reason))) {
+                    startCallToReject = activeStartCall;
+                }
+                activeStartCall = null;
+                pendingStopReason = null;
+                continuousPTTMode = false;
+                forceStopped = false;
+                resetPartialResultsCache();
+                accumulatedResults = new StringBuilder();
+
+                destroyCurrentRecognizerLocked();
+                try {
+                    recreateIdleRecognizerLocked();
+                } catch (Exception ex) {
+                    emitReady = false;
+                    Logger.error(TAG, "Failed to recreate recognizer", ex);
+                    emitErrorEvent("RECREATE_FAILED", ex.getMessage(), finishedSessionId);
+                }
+
+                state = ListeningState.IDLE;
+                if (startCallToReject != null) {
+                    startCallToReject.reject("Recognition stopped before final results were produced.");
+                }
+                if (emitReady) {
+                    notifyListeners(READY_FOR_NEXT_SESSION_EVENT, new JSObject().put("sessionId", finishedSessionId));
+                }
+                emitListeningState("stopped", finishedSessionId, reason, errorCode, "stopped");
+            } finally {
+                lock.unlock();
             }
-        );
+        });
     }
 
     private void recreateIdleRecognizerLocked() {
@@ -846,8 +842,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private boolean canUseOnDeviceRecognition() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(bridge.getContext());
+        return (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && SpeechRecognizer.isOnDeviceRecognitionAvailable(bridge.getContext())
+        );
     }
 
     private boolean isLanguageSupported(String requestedLanguage, List<String> candidateLanguages) {
@@ -870,7 +867,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private Executor mainExecutor() {
-        return command -> bridge.getActivity().runOnUiThread(command);
+        return (command) -> bridge.getActivity().runOnUiThread(command);
     }
 
     private void emitListeningState(String stateValue, long currentSessionId, String reason, String errorCode, String status) {
@@ -1002,9 +999,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 call.reject(errorMessage);
             }
 
-            String reason = pendingStopReason != null ? pendingStopReason : (
-                error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ? "silence" : "error"
-            );
+            String reason = pendingStopReason != null
+                ? pendingStopReason
+                : (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ? "silence" : "error");
             finishSession(listenerSessionId, reason, errorCode);
         }
 

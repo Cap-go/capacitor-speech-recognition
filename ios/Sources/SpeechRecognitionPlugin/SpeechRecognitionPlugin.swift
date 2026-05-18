@@ -19,6 +19,7 @@ private enum ListeningReason: String {
     case unknown
 }
 
+// swiftlint:disable type_body_length
 @objc(SpeechRecognitionPlugin)
 public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private let pluginVersion = "8.0.10"
@@ -90,11 +91,16 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        let contextualStrings = (call.getArray("contextualStrings", String.self) ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
         let options = RecognitionOptions(
             language: call.getString("language") ?? Locale.current.identifier,
             maxResults: call.getInt("maxResults") ?? maxDefaultResults,
             partialResults: call.getBool("partialResults") ?? false,
             addPunctuation: call.getBool("addPunctuation") ?? false,
+            contextualStrings: contextualStrings,
             useOnDeviceRecognition: call.getBool("useOnDeviceRecognition") ?? false,
             continuousPTT: call.getBool("continuousPTT") ?? false
         )
@@ -322,6 +328,9 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = options.partialResults
+        if !options.contextualStrings.isEmpty {
+            recognitionRequest.contextualStrings = options.contextualStrings
+        }
         if #available(iOS 16.0, *) {
             recognitionRequest.addsPunctuation = options.addPunctuation
         }
@@ -836,12 +845,14 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         return .granted
     }
 }
+// swiftlint:enable type_body_length
 
 private struct RecognitionOptions {
     let language: String
     let maxResults: Int
     let partialResults: Bool
     let addPunctuation: Bool
+    let contextualStrings: [String]
     let useOnDeviceRecognition: Bool
     let continuousPTT: Bool
 }

@@ -40,6 +40,17 @@ export interface SpeechRecognitionStartOptions {
    */
   addPunctuation?: boolean;
   /**
+   * Words or phrases that should be recognized more accurately by native speech APIs.
+   *
+   * On iOS, these are passed to `SFSpeechRecognitionRequest.contextualStrings`
+   * when the plugin uses the legacy `SFSpeechRecognizer` path. That path is the
+   * default on all iOS versions, the fallback below iOS 26, and still available
+   * on iOS 26+ by leaving `useOnDeviceRecognition` disabled.
+   *
+   * Ignored by Android and by the iOS 26+ `SpeechAnalyzer` path.
+   */
+  contextualStrings?: string[];
+  /**
    * Opt in to the platform's newer on-device recognition path when available.
    *
    * On iOS 26+, this uses Apple's `SpeechAnalyzer` / `SpeechTranscriber` pipeline.
@@ -47,6 +58,8 @@ export interface SpeechRecognitionStartOptions {
    *
    * It is intentionally opt-in so existing apps keep the legacy flow unless they choose
    * to roll out the new behavior.
+   * On iOS, leaving this disabled keeps `SFSpeechRecognizer` on every supported OS version.
+   * Enabling it on older iOS versions or unsupported locales falls back to `SFSpeechRecognizer`.
    *
    * Use {@link SpeechRecognitionPlugin.isOnDeviceRecognitionAvailable} before enabling it in production.
    *

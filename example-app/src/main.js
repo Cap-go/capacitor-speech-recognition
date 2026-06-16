@@ -1,3 +1,5 @@
+import { CapacitorUpdater } from '@capgo/capacitor-updater';
+import { Capacitor } from '@capacitor/core';
 import './style.css';
 import { SpeechRecognition } from '@capgo/capacitor-speech-recognition';
 
@@ -351,3 +353,9 @@ window.addEventListener('beforeunload', () => {
   segmentedSessionListener?.remove();
   readyListener?.remove();
 });
+
+if (Capacitor.isNativePlatform()) {
+  CapacitorUpdater.notifyAppReady().catch((error) => {
+    console.error('Capgo notifyAppReady failed', error);
+  });
+}

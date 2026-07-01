@@ -83,6 +83,12 @@ export interface SpeechRecognitionStartOptions {
    * This restart behavior is implemented for Android inline recognition and iOS native recognition.
    */
   continuousPTT?: boolean;
+  /**
+   * Suppresses the Android system beep when inline recognition starts or restarts.
+   *
+   * Defaults to `true` when `continuousPTT` is enabled.
+   */
+  muteRecognizerBeep?: boolean;
 }
 
 /**
@@ -231,6 +237,10 @@ export interface PTTStateOptions {
    * Whether the PTT button is currently held.
    */
   held: boolean;
+  /**
+   * When set, updates whether Android should suppress the recognizer start beep for the active session.
+   */
+  mute?: boolean;
 }
 
 export interface SpeechRecognitionPlugin {

@@ -2,7 +2,9 @@ package app.capgo.speechrecognition;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -64,6 +66,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private boolean forceStopped = false;
     private boolean pttButtonHeld = false;
     private boolean continuousPTTMode = false;
+    private boolean muteRecognizerBeep = false;
+    private Integer savedNotificationVolume;
+    private Integer savedSystemVolume;
     private boolean popupSessionActive = false;
     private boolean popupSessionCancelled = false;
     private StringBuilder accumulatedResults = new StringBuilder();
@@ -164,6 +169,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         boolean useOnDeviceRecognition = call.getBoolean("useOnDeviceRecognition", false);
         int allowForSilence = call.getInt("allowForSilence", 0);
         boolean continuousPTT = call.getBoolean("continuousPTT", false);
+        boolean muteRecognizerBeepOption = call.getBoolean("muteRecognizerBeep", continuousPTT);
 
         if (useOnDeviceRecognition && popup) {
             call.reject("On-device recognition is not supported with popup mode on Android.");
@@ -198,6 +204,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             resetPartialResultsCache();
             accumulatedResults = new StringBuilder();
             continuousPTTMode = continuousPTT;
+            muteRecognizerBeep = muteRecognizerBeepOption;
             popupSessionActive = false;
             popupSessionCancelled = false;
             lastLanguage = language;
@@ -409,6 +416,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         try {
             lock.lock();
             pttButtonHeld = held;
+            if (call.getData().has("mute")) {
+                muteRecognizerBeep = call.getBoolean("mute");
+            }
             if (held) {
                 accumulatedResults = new StringBuilder();
                 forceStopped = false;
@@ -596,6 +606,10 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
         }
 
+        if (muteRecognizerBeep) {
+            intent.putExtra(EXTRA_DICTATE_BEEP, false);
+        }
+
         return intent;
     }
 
@@ -722,7 +736,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private void startInlineListening(Intent intent, boolean partialResults, PluginCall call, long currentSessionId, boolean restarting) {
+        muteRecognizerBeepIfNeeded();
         speechRecognizer.startListening(intent);
+        handler.postDelayed(this::restoreRecognizerBeepIfNeeded, 750);
         listening(true);
         state = ListeningState.STARTED;
         emitListeningState("started", currentSessionId, restarting ? "results" : "userStart", null, "started");
@@ -984,6 +1000,43 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
     }
 
+
+    private void muteRecognizerBeepIfNeeded() {
+        if (!muteRecognizerBeep) {
+            return;
+        }
+
+        AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager == null) {
+            return;
+        }
+
+        if (savedNotificationVolume == null) {
+            savedNotificationVolume = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION);
+            savedSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_SYSTEM);
+        }
+
+        audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0);
+        audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0);
+    }
+
+    private void restoreRecognizerBeepIfNeeded() {
+        if (!muteRecognizerBeep || savedNotificationVolume == null) {
+            return;
+        }
+
+        AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, savedNotificationVolume, 0);
+            if (savedSystemVolume != null) {
+                audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, savedSystemVolume, 0);
+            }
+        }
+
+        savedNotificationVolume = null;
+        savedSystemVolume = null;
+    }
+
     private class SpeechRecognitionListener implements RecognitionListener {
 
         private final long listenerSessionId;
@@ -1005,7 +1058,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
 
         @Override
-        public void onReadyForSpeech(Bundle params) {}
+        public void onReadyForSpeech(Bundle params) {
+            restoreRecognizerBeepIfNeeded();
+        }
 
         @Override
         public void onBeginningOfSpeech() {}

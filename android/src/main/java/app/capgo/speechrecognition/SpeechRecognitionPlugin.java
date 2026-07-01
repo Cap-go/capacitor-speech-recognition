@@ -69,6 +69,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private boolean muteRecognizerBeep = false;
     private Integer savedNotificationVolume;
     private Integer savedSystemVolume;
+    private long mutedForGeneration = -1;
     private boolean popupSessionActive = false;
     private boolean popupSessionCancelled = false;
     private StringBuilder accumulatedResults = new StringBuilder();
@@ -606,6 +607,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
         }
 
+        // EXTRA_DICTATE_BEEP is undocumented and ignored on some devices; AudioManager fallback handles those.
         if (muteRecognizerBeep) {
             intent.putExtra(EXTRA_DICTATE_BEEP, false);
         }
@@ -736,9 +738,29 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private void startInlineListening(Intent intent, boolean partialResults, PluginCall call, long currentSessionId, boolean restarting) {
-        muteRecognizerBeepIfNeeded();
+        final long muteGeneration;
+        try {
+            lock.lock();
+            muteGeneration = recognizerGeneration;
+            muteRecognizerBeepIfNeededLocked(muteGeneration);
+        } finally {
+            lock.unlock();
+        }
         speechRecognizer.startListening(intent);
-        handler.postDelayed(this::restoreRecognizerBeepIfNeeded, 750);
+        handler.postDelayed(
+            () -> {
+                try {
+                    lock.lock();
+                    if (currentSessionId != sessionId) {
+                        return;
+                    }
+                    restoreRecognizerBeepIfNeededLocked(muteGeneration);
+                } finally {
+                    lock.unlock();
+                }
+            },
+            750
+        );
         listening(true);
         state = ListeningState.STARTED;
         emitListeningState("started", currentSessionId, restarting ? "results" : "userStart", null, "started");
@@ -1000,7 +1022,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
     }
 
-    private void muteRecognizerBeepIfNeeded() {
+    private void muteRecognizerBeepIfNeededLocked(long generation) {
         if (!muteRecognizerBeep) {
             return;
         }
@@ -1010,30 +1032,39 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        if (savedNotificationVolume == null) {
-            savedNotificationVolume = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION);
-            savedSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_SYSTEM);
+        try {
+            if (savedNotificationVolume == null) {
+                savedNotificationVolume = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION);
+                savedSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_SYSTEM);
+                mutedForGeneration = generation;
+            }
+            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0);
+            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0);
+        } catch (SecurityException ex) {
+            Logger.warn(TAG, "Unable to mute recognizer beep: " + ex.getMessage());
         }
-
-        audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0);
-        audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0);
     }
 
-    private void restoreRecognizerBeepIfNeeded() {
-        if (!muteRecognizerBeep || savedNotificationVolume == null) {
+    private void restoreRecognizerBeepIfNeededLocked(long generation) {
+        if (savedNotificationVolume == null || generation != mutedForGeneration || generation != recognizerGeneration) {
             return;
         }
 
         AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
         if (audioManager != null) {
-            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, savedNotificationVolume, 0);
-            if (savedSystemVolume != null) {
-                audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, savedSystemVolume, 0);
+            try {
+                audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, savedNotificationVolume, 0);
+                if (savedSystemVolume != null) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, savedSystemVolume, 0);
+                }
+            } catch (SecurityException ex) {
+                Logger.warn(TAG, "Unable to restore recognizer beep volume: " + ex.getMessage());
             }
         }
 
         savedNotificationVolume = null;
         savedSystemVolume = null;
+        mutedForGeneration = -1;
     }
 
     private class SpeechRecognitionListener implements RecognitionListener {
@@ -1058,7 +1089,15 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onReadyForSpeech(Bundle params) {
-            restoreRecognizerBeepIfNeeded();
+            if (isStale()) {
+                return;
+            }
+            try {
+                lock.lock();
+                restoreRecognizerBeepIfNeededLocked(listenerGeneration);
+            } finally {
+                lock.unlock();
+            }
         }
 
         @Override

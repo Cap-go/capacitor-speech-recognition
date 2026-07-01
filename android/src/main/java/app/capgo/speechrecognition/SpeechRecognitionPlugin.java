@@ -819,6 +819,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
                 cancelPendingForceStopLocked();
                 listening(false);
+                restoreRecognizerBeepIfNeededLocked(mutedForGeneration);
                 if (activeStartCall != null && !lastPartialResults && ("userStop".equals(reason) || "forceStop".equals(reason))) {
                     startCallToReject = activeStartCall;
                 }
@@ -1010,6 +1011,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         handler.removeCallbacksAndMessages(null);
         try {
             lock.lock();
+            restoreRecognizerBeepIfNeededLocked(mutedForGeneration);
             destroyCurrentRecognizerLocked();
             activeStartCall = null;
             pendingStopReason = null;
@@ -1046,7 +1048,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private void restoreRecognizerBeepIfNeededLocked(long generation) {
-        if (savedNotificationVolume == null || generation != mutedForGeneration || generation != recognizerGeneration) {
+        if (savedNotificationVolume == null || generation != mutedForGeneration) {
             return;
         }
 

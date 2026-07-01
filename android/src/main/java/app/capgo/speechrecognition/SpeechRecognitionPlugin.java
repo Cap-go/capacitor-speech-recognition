@@ -1000,7 +1000,6 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
     }
 
-
     private void muteRecognizerBeepIfNeeded() {
         if (!muteRecognizerBeep) {
             return;

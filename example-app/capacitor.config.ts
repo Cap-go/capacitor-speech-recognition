@@ -4,7 +4,7 @@ import pkg from './package.json';
 
 const config: CapacitorConfig = {
   appId: 'app.capgo.speechrecognition',
-  appName: 'Speech Recognition Example',
+  appName: '@capgo/capacitor-speech-recognition',
   webDir: 'dist',
   plugins: {
     SplashScreen: {

@@ -102,6 +102,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             addPunctuation: call.getBool("addPunctuation") ?? false,
             contextualStrings: contextualStrings,
             useOnDeviceRecognition: call.getBool("useOnDeviceRecognition") ?? false,
+            preferLegacyRecognizer: call.getBool("preferLegacyRecognizer") ?? false,
             continuousPTT: call.getBool("continuousPTT") ?? false
         )
 
@@ -279,6 +280,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             let locale = Locale(identifier: options.language)
             if #available(iOS 26.0, *),
                options.useOnDeviceRecognition,
+               !options.preferLegacyRecognizer,
                await SpeechAnalyzerRecognitionSupport.supports(locale: locale) {
                 beginModernRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
             } else {
@@ -328,6 +330,16 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = options.partialResults
+        // Honour `useOnDeviceRecognition` on the legacy path too. Without this the
+        // option has no effect here and the audio is sent to Apple's servers, even
+        // though `SFSpeechRecognizer` has supported on-device recognition since
+        // iOS 13. Verified on device: with this line, transcription keeps working
+        // in airplane mode.
+        if #available(iOS 13.0, *),
+           options.useOnDeviceRecognition,
+           recognizer.supportsOnDeviceRecognition {
+            recognitionRequest.requiresOnDeviceRecognition = true
+        }
         if !options.contextualStrings.isEmpty {
             recognitionRequest.contextualStrings = options.contextualStrings
         }
@@ -854,5 +866,7 @@ private struct RecognitionOptions {
     let addPunctuation: Bool
     let contextualStrings: [String]
     let useOnDeviceRecognition: Bool
+    /// Skip the modern (SpeechAnalyzer) path even when it is available.
+    let preferLegacyRecognizer: Bool
     let continuousPTT: Bool
 }

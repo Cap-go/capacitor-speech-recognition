@@ -73,6 +73,18 @@ export interface SpeechRecognitionStartOptions {
    */
   useOnDeviceRecognition?: boolean;
   /**
+   * iOS only: skip the modern `SpeechAnalyzer` path even when it is available,
+   * so that `useOnDeviceRecognition` applies to `SFSpeechRecognizer`
+   * (`requiresOnDeviceRecognition`) instead.
+   *
+   * Useful on iOS 26 devices where the modern path starts and stops a session
+   * without ever emitting `partialResults`.
+   *
+   * @default false
+   * @since 8.1.11
+   */
+  preferLegacyRecognizer?: boolean;
+  /**
    * Allow a number of milliseconds of silence before splitting the recognition session into segments.
    * Required to be greater than zero and currently supported on Android only.
    */

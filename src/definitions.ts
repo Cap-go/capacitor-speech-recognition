@@ -44,8 +44,10 @@ export interface SpeechRecognitionStartOptions {
    *
    * On iOS, these are passed to `SFSpeechRecognitionRequest.contextualStrings`
    * when the plugin uses the legacy `SFSpeechRecognizer` path. That path is the
-   * default on all iOS versions, the fallback below iOS 26, and still available
-   * on iOS 26+ by leaving `useOnDeviceRecognition` disabled.
+   * default on all iOS versions, the fallback below iOS 26, and still available on
+   * iOS 26+ either by leaving `useOnDeviceRecognition` disabled or by setting
+   * `preferLegacyRecognizer` — so contextual strings and on-device recognition can
+   * be used together.
    *
    * Ignored by Android and by the iOS 26+ `SpeechAnalyzer` path.
    */

@@ -330,15 +330,39 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = options.partialResults
-        // Honour `useOnDeviceRecognition` on the legacy path too. Without this the
-        // option has no effect here and the audio is sent to Apple's servers, even
-        // though `SFSpeechRecognizer` has supported on-device recognition since
-        // iOS 13. Verified on device: with this line, transcription keeps working
-        // in airplane mode.
-        if #available(iOS 13.0, *),
-           options.useOnDeviceRecognition,
-           recognizer.supportsOnDeviceRecognition {
-            recognitionRequest.requiresOnDeviceRecognition = true
+
+        let onDeviceRequirement = LegacyOnDeviceRecognitionRequirement.evaluate(
+            useOnDeviceRecognition: options.useOnDeviceRecognition,
+            supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition
+        )
+
+        switch onDeviceRequirement {
+        case .unavailable:
+            let message = LegacyOnDeviceRecognitionRequirement.unavailableErrorMessage
+            call?.reject(message)
+            emitErrorEvent(
+                code: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode,
+                message: message,
+                sessionId: sessionId
+            )
+            activeCall = nil
+            finishSessionIfNeeded(
+                sessionId: sessionId,
+                reason: .error,
+                errorCode: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode
+            )
+            return
+        case .required:
+            // Honour `useOnDeviceRecognition` on the legacy path. Without this the
+            // option has no effect here and the audio is sent to Apple's servers, even
+            // though `SFSpeechRecognizer` has supported on-device recognition since
+            // iOS 13. Verified on device: with this line, transcription keeps working
+            // in airplane mode.
+            if #available(iOS 13.0, *) {
+                recognitionRequest.requiresOnDeviceRecognition = true
+            }
+        case .notRequired:
+            break
         }
         if !options.contextualStrings.isEmpty {
             recognitionRequest.contextualStrings = options.contextualStrings

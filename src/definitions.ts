@@ -282,7 +282,7 @@ export interface SpeechRecognitionPlugin {
    * Android: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer)
    */
   isOnDeviceRecognitionAvailable(
-    options?: Pick<SpeechRecognitionStartOptions, 'language'>,
+    options?: Pick<SpeechRecognitionStartOptions, 'language' | 'preferLegacyRecognizer'>,
   ): Promise<SpeechRecognitionAvailability>;
   /**
    * Begins capturing audio and transcribing speech.

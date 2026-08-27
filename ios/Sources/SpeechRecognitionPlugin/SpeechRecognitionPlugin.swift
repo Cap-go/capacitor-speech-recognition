@@ -69,15 +69,28 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func isOnDeviceRecognitionAvailable(_ call: CAPPluginCall) {
         let locale = Locale(identifier: call.getString("language") ?? Locale.current.identifier)
+        let preferLegacyRecognizer = call.getBool("preferLegacyRecognizer") ?? false
+        let modernPathSupportedOnOS: Bool
         if #available(iOS 26.0, *) {
+            modernPathSupportedOnOS = true
+        } else {
+            modernPathSupportedOnOS = false
+        }
+
+        switch OnDeviceRecognitionAvailabilityResolver.route(
+            preferLegacyRecognizer: preferLegacyRecognizer,
+            modernPathSupportedOnOS: modernPathSupportedOnOS
+        ) {
+        case .modern:
             Task { @MainActor in
                 let isAvailable = await SpeechAnalyzerRecognitionSupport.supports(locale: locale)
                 call.resolve(["available": isAvailable])
             }
-            return
+        case .legacy:
+            call.resolve([
+                "available": OnDeviceRecognitionAvailabilityResolver.legacyAvailability(for: locale)
+            ])
         }
-
-        call.resolve(["available": false])
     }
 
     @objc func start(_ call: CAPPluginCall) {

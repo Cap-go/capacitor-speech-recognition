@@ -82,9 +82,13 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             modernPathSupportedOnOS: modernPathSupportedOnOS
         ) {
         case .modern:
-            Task { @MainActor in
-                let isAvailable = await SpeechAnalyzerRecognitionSupport.supports(locale: locale)
-                call.resolve(["available": isAvailable])
+            if #available(iOS 26.0, *) {
+                Task { @MainActor in
+                    let isAvailable = await SpeechAnalyzerRecognitionSupport.supports(locale: locale)
+                    call.resolve(["available": isAvailable])
+                }
+            } else {
+                call.resolve(["available": false])
             }
         case .legacy:
             call.resolve([

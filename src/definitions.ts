@@ -61,7 +61,10 @@ export interface SpeechRecognitionStartOptions {
    * It is intentionally opt-in so existing apps keep the legacy flow unless they choose
    * to roll out the new behavior.
    * On iOS, leaving this disabled keeps `SFSpeechRecognizer` on every supported OS version.
-   * Enabling it on older iOS versions or unsupported locales falls back to `SFSpeechRecognizer`.
+   * On the legacy `SFSpeechRecognizer` path, enabling this rejects with
+   * `ON_DEVICE_RECOGNITION_UNAVAILABLE` when on-device recognition is not supported for the locale.
+   * On iOS 26+, enabling this without `preferLegacyRecognizer` uses the modern `SpeechAnalyzer` path
+   * when available; otherwise recognition falls back to the legacy path with the same rejection rule.
    *
    * Use {@link SpeechRecognitionPlugin.isOnDeviceRecognitionAvailable} before enabling it in production.
    *

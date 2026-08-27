@@ -22,7 +22,7 @@ private enum ListeningReason: String {
 // swiftlint:disable type_body_length
 @objc(SpeechRecognitionPlugin)
 public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
-    private let pluginVersion = "8.0.10"
+    private let pluginVersion = "8.1.11"
     public let identifier = "SpeechRecognitionPlugin"
     public let jsName = "SpeechRecognition"
     public let pluginMethods: [CAPPluginMethod] = [

@@ -4,7 +4,10 @@ set -euo pipefail
 pick_ios_simulator_destination() {
   python3 - <<'PY'
 import json
+import os
 import subprocess
+
+target_runtime = os.environ.get("IOS_SIMULATOR_RUNTIME", "iOS-26")
 
 result = subprocess.run(
     ["xcrun", "simctl", "list", "devices", "available", "-j"],
@@ -25,7 +28,7 @@ preferred_names = [
 
 devices_by_name: dict[str, str] = {}
 for runtime, devices in data.get("devices", {}).items():
-    if "iOS" not in runtime or "Simulator" not in runtime:
+    if target_runtime not in runtime or "Simulator" not in runtime:
         continue
     for device in devices:
         if not device.get("isAvailable"):
@@ -47,10 +50,6 @@ if devices_by_name:
 raise SystemExit("No available iPhone simulator found for iOS tests.")
 PY
 }
-
-xcodebuild build \
-  -scheme CapgoCapacitorSpeechRecognition \
-  -destination generic/platform=iOS
 
 destination="$(pick_ios_simulator_destination)"
 echo "Running iOS unit tests on: ${destination}"

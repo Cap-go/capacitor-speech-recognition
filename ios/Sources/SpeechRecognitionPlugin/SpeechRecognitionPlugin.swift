@@ -22,7 +22,7 @@ private enum ListeningReason: String {
 // swiftlint:disable type_body_length
 @objc(SpeechRecognitionPlugin)
 public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
-    private let pluginVersion = "8.0.10"
+    private let pluginVersion = "8.1.11"
     public let identifier = "SpeechRecognitionPlugin"
     public let jsName = "SpeechRecognition"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -69,15 +69,32 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func isOnDeviceRecognitionAvailable(_ call: CAPPluginCall) {
         let locale = Locale(identifier: call.getString("language") ?? Locale.current.identifier)
+        let preferLegacyRecognizer = call.getBool("preferLegacyRecognizer") ?? false
+        let modernPathSupportedOnOS: Bool
         if #available(iOS 26.0, *) {
-            Task { @MainActor in
-                let isAvailable = await SpeechAnalyzerRecognitionSupport.supports(locale: locale)
-                call.resolve(["available": isAvailable])
-            }
-            return
+            modernPathSupportedOnOS = true
+        } else {
+            modernPathSupportedOnOS = false
         }
 
-        call.resolve(["available": false])
+        switch OnDeviceRecognitionAvailabilityResolver.route(
+            preferLegacyRecognizer: preferLegacyRecognizer,
+            modernPathSupportedOnOS: modernPathSupportedOnOS
+        ) {
+        case .modern:
+            if #available(iOS 26.0, *) {
+                Task { @MainActor in
+                    let isAvailable = await SpeechAnalyzerRecognitionSupport.supports(locale: locale)
+                    call.resolve(["available": isAvailable])
+                }
+            } else {
+                call.resolve(["available": false])
+            }
+        case .legacy:
+            call.resolve([
+                "available": OnDeviceRecognitionAvailabilityResolver.legacyAvailability(for: locale)
+            ])
+        }
     }
 
     @objc func start(_ call: CAPPluginCall) {
@@ -102,6 +119,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             addPunctuation: call.getBool("addPunctuation") ?? false,
             contextualStrings: contextualStrings,
             useOnDeviceRecognition: call.getBool("useOnDeviceRecognition") ?? false,
+            preferLegacyRecognizer: call.getBool("preferLegacyRecognizer") ?? false,
             continuousPTT: call.getBool("continuousPTT") ?? false
         )
 
@@ -279,6 +297,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             let locale = Locale(identifier: options.language)
             if #available(iOS 26.0, *),
                options.useOnDeviceRecognition,
+               !options.preferLegacyRecognizer,
                await SpeechAnalyzerRecognitionSupport.supports(locale: locale) {
                 beginModernRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
             } else {
@@ -314,6 +333,28 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        let onDeviceRequirement = LegacyOnDeviceRecognitionRequirement.evaluate(
+            useOnDeviceRecognition: options.useOnDeviceRecognition,
+            supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition
+        )
+
+        if onDeviceRequirement == .unavailable {
+            let message = LegacyOnDeviceRecognitionRequirement.unavailableErrorMessage
+            call?.reject(message)
+            emitErrorEvent(
+                code: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode,
+                message: message,
+                sessionId: sessionId
+            )
+            activeCall = nil
+            finishSessionIfNeeded(
+                sessionId: sessionId,
+                reason: .error,
+                errorCode: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode
+            )
+            return
+        }
+
         speechRecognizer = recognizer
 
         do {
@@ -328,6 +369,17 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = options.partialResults
+
+        if onDeviceRequirement == .required {
+            // Honour `useOnDeviceRecognition` on the legacy path. Without this the
+            // option has no effect here and the audio is sent to Apple's servers, even
+            // though `SFSpeechRecognizer` has supported on-device recognition since
+            // iOS 13. Verified on device: with this line, transcription keeps working
+            // in airplane mode.
+            if #available(iOS 13.0, *) {
+                recognitionRequest.requiresOnDeviceRecognition = true
+            }
+        }
         if !options.contextualStrings.isEmpty {
             recognitionRequest.contextualStrings = options.contextualStrings
         }
@@ -854,5 +906,7 @@ private struct RecognitionOptions {
     let addPunctuation: Bool
     let contextualStrings: [String]
     let useOnDeviceRecognition: Bool
+    /// Skip the modern (SpeechAnalyzer) path even when it is available.
+    let preferLegacyRecognizer: Bool
     let continuousPTT: Bool
 }

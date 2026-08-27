@@ -42,7 +42,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
     public static final String SPEECH_RECOGNITION = "speechRecognition";
     private static final String TAG = "SpeechRecognition";
-    private static final String PLUGIN_VERSION = "8.0.10";
+    private static final String PLUGIN_VERSION = "8.1.11";
     private static final int FORCE_STOP_TIMEOUT_MS = 1500;
     private static final int STOP_FALLBACK_TIMEOUT_MS = 500;
     private static final int CONTINUOUS_RESTART_DELAY_MS = 100;

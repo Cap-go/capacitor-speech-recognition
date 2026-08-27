@@ -44,8 +44,10 @@ export interface SpeechRecognitionStartOptions {
    *
    * On iOS, these are passed to `SFSpeechRecognitionRequest.contextualStrings`
    * when the plugin uses the legacy `SFSpeechRecognizer` path. That path is the
-   * default on all iOS versions, the fallback below iOS 26, and still available
-   * on iOS 26+ by leaving `useOnDeviceRecognition` disabled.
+   * default on all iOS versions, the fallback below iOS 26, and still available on
+   * iOS 26+ either by leaving `useOnDeviceRecognition` disabled or by setting
+   * `preferLegacyRecognizer` — so contextual strings and on-device recognition can
+   * be used together.
    *
    * Ignored by Android and by the iOS 26+ `SpeechAnalyzer` path.
    */
@@ -59,7 +61,10 @@ export interface SpeechRecognitionStartOptions {
    * It is intentionally opt-in so existing apps keep the legacy flow unless they choose
    * to roll out the new behavior.
    * On iOS, leaving this disabled keeps `SFSpeechRecognizer` on every supported OS version.
-   * Enabling it on older iOS versions or unsupported locales falls back to `SFSpeechRecognizer`.
+   * On the legacy `SFSpeechRecognizer` path, enabling this rejects with
+   * `ON_DEVICE_RECOGNITION_UNAVAILABLE` when on-device recognition is not supported for the locale.
+   * On iOS 26+, enabling this without `preferLegacyRecognizer` uses the modern `SpeechAnalyzer` path
+   * when available; otherwise recognition falls back to the legacy path with the same rejection rule.
    *
    * Use {@link SpeechRecognitionPlugin.isOnDeviceRecognitionAvailable} before enabling it in production.
    *
@@ -72,6 +77,18 @@ export interface SpeechRecognitionStartOptions {
    * Defaults to `false`.
    */
   useOnDeviceRecognition?: boolean;
+  /**
+   * iOS only: skip the modern `SpeechAnalyzer` path even when it is available,
+   * so that `useOnDeviceRecognition` applies to `SFSpeechRecognizer`
+   * (`requiresOnDeviceRecognition`) instead.
+   *
+   * Useful on iOS 26 devices where the modern path starts and stops a session
+   * without ever emitting `partialResults`.
+   *
+   * @default false
+   * @since 8.1.11
+   */
+  preferLegacyRecognizer?: boolean;
   /**
    * Allow a number of milliseconds of silence before splitting the recognition session into segments.
    * Required to be greater than zero and currently supported on Android only.
@@ -255,20 +272,25 @@ export interface SpeechRecognitionPlugin {
    */
   available(): Promise<SpeechRecognitionAvailability>;
   /**
-   * Checks whether the platform's newer on-device recognition path is available for the selected locale.
+   * Checks whether on-device speech recognition is available for the selected locale.
    *
    * This is the capability check you should use before enabling `useOnDeviceRecognition`.
-   * A `true` result means the current device, OS version, and locale can use the newer
-   * on-device path for that platform.
+   * On iOS, the result depends on which recognizer path `start()` will use:
    *
-   * Returns `false` when the device only supports the legacy recognizer path.
+   * - When `preferLegacyRecognizer` is `false` (default) on iOS 26+, this checks the modern
+   *   `SpeechAnalyzer` path.
+   * - On older iOS versions, or when `preferLegacyRecognizer` is `true`, this checks
+   *   `SFSpeechRecognizer.supportsOnDeviceRecognition` for the legacy path.
+   *
+   * Pass the same `preferLegacyRecognizer` value here and in `start()` so the availability
+   * check matches the route that recognition will take.
    *
    * Platform SDK docs:
    * iOS: [Speech](https://developer.apple.com/documentation/speech)
    * Android: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer)
    */
   isOnDeviceRecognitionAvailable(
-    options?: Pick<SpeechRecognitionStartOptions, 'language'>,
+    options?: Pick<SpeechRecognitionStartOptions, 'language' | 'preferLegacyRecognizer'>,
   ): Promise<SpeechRecognitionAvailability>;
   /**
    * Begins capturing audio and transcribing speech.

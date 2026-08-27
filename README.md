@@ -247,13 +247,18 @@ Checks whether the native speech recognition service is usable on the current de
 isOnDeviceRecognitionAvailable(options?: Pick<SpeechRecognitionStartOptions, "language" | "preferLegacyRecognizer"> | undefined) => Promise<SpeechRecognitionAvailability>
 ```
 
-Checks whether the platform's newer on-device recognition path is available for the selected locale.
+Checks whether on-device speech recognition is available for the selected locale.
 
 This is the capability check you should use before enabling `useOnDeviceRecognition`.
-A `true` result means the current device, OS version, and locale can use the newer
-on-device path for that platform.
+On iOS, the result depends on which recognizer path `start()` will use:
 
-Returns `false` when the device only supports the legacy recognizer path.
+- When `preferLegacyRecognizer` is `false` (default) on iOS 26+, this checks the modern
+  `SpeechAnalyzer` path.
+- On older iOS versions, or when `preferLegacyRecognizer` is `true`, this checks
+  `SFSpeechRecognizer.supportsOnDeviceRecognition` for the legacy path.
+
+Pass the same `preferLegacyRecognizer` value here and in `start()` so the availability
+check matches the route that recognition will take.
 
 Platform SDK docs:
 iOS: [Speech](https://developer.apple.com/documentation/speech)

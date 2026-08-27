@@ -329,6 +329,28 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        let onDeviceRequirement = LegacyOnDeviceRecognitionRequirement.evaluate(
+            useOnDeviceRecognition: options.useOnDeviceRecognition,
+            supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition
+        )
+
+        if onDeviceRequirement == .unavailable {
+            let message = LegacyOnDeviceRecognitionRequirement.unavailableErrorMessage
+            call?.reject(message)
+            emitErrorEvent(
+                code: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode,
+                message: message,
+                sessionId: sessionId
+            )
+            activeCall = nil
+            finishSessionIfNeeded(
+                sessionId: sessionId,
+                reason: .error,
+                errorCode: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode
+            )
+            return
+        }
+
         speechRecognizer = recognizer
 
         do {
@@ -344,28 +366,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = options.partialResults
 
-        let onDeviceRequirement = LegacyOnDeviceRecognitionRequirement.evaluate(
-            useOnDeviceRecognition: options.useOnDeviceRecognition,
-            supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition
-        )
-
-        switch onDeviceRequirement {
-        case .unavailable:
-            let message = LegacyOnDeviceRecognitionRequirement.unavailableErrorMessage
-            call?.reject(message)
-            emitErrorEvent(
-                code: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode,
-                message: message,
-                sessionId: sessionId
-            )
-            activeCall = nil
-            finishSessionIfNeeded(
-                sessionId: sessionId,
-                reason: .error,
-                errorCode: LegacyOnDeviceRecognitionRequirement.unavailableErrorCode
-            )
-            return
-        case .required:
+        if onDeviceRequirement == .required {
             // Honour `useOnDeviceRecognition` on the legacy path. Without this the
             // option has no effect here and the audio is sent to Apple's servers, even
             // though `SFSpeechRecognizer` has supported on-device recognition since
@@ -374,8 +375,6 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             if #available(iOS 13.0, *) {
                 recognitionRequest.requiresOnDeviceRecognition = true
             }
-        case .notRequired:
-            break
         }
         if !options.contextualStrings.isEmpty {
             recognitionRequest.contextualStrings = options.contextualStrings

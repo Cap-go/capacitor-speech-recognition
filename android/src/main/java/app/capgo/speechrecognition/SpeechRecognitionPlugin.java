@@ -86,6 +86,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private long sessionId = 0;
     private long recognizerGeneration = 0;
     private String pendingStopReason;
+    private AudioLevelMeter audioLevelMeter;
 
     @Override
     public void load() {
@@ -935,6 +936,28 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
     private void listening(boolean value) {
         listening = value;
+        if (value) {
+            startAudioLevelMeter();
+        } else {
+            stopAudioLevelMeter();
+        }
+    }
+
+    private void startAudioLevelMeter() {
+        stopAudioLevelMeter();
+        audioLevelMeter = new AudioLevelMeter(this, (level) -> {
+            JSObject payload = new JSObject();
+            payload.put("level", level);
+            notifyListeners(AUDIO_LEVEL_EVENT, payload);
+        });
+        audioLevelMeter.start();
+    }
+
+    private void stopAudioLevelMeter() {
+        if (audioLevelMeter != null) {
+            audioLevelMeter.stop();
+            audioLevelMeter = null;
+        }
     }
 
     private void resetPartialResultsCache() {

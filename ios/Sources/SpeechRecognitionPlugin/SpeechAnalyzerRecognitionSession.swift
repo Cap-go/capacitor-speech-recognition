@@ -52,6 +52,7 @@ final class SpeechAnalyzerRecognitionSession {
     typealias ResultHandler = @MainActor ([String], Bool) -> Void
     typealias VoidHandler = @MainActor () -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
+    typealias AudioLevelHandler = @MainActor (Float) -> Void
 
     private static let microphoneTapBufferSize: AVAudioFrameCount = 2048
 
@@ -75,6 +76,9 @@ final class SpeechAnalyzerRecognitionSession {
     var onListeningStopped: VoidHandler?
     var onResult: ResultHandler?
     var onError: ErrorHandler?
+    var onAudioLevel: AudioLevelHandler?
+    private var lastAudioLevelEmitTime: CFTimeInterval = 0
+    private let audioLevelEmitInterval: CFTimeInterval = 1.0 / 15.0
 
     var isRunning: Bool {
         audioEngine.isRunning || resultTask != nil || isTearingDown
@@ -163,6 +167,38 @@ final class SpeechAnalyzerRecognitionSession {
         isAudioSessionActive = true
     }
 
+
+    private func emitAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer) {
+        let now = CACurrentMediaTime()
+        guard now - lastAudioLevelEmitTime >= audioLevelEmitInterval else {
+            return
+        }
+        lastAudioLevelEmitTime = now
+        let level = Self.normalizedAudioLevel(from: buffer)
+        Task { @MainActor [weak self] in
+            self?.onAudioLevel?(level)
+        }
+    }
+
+    private static func normalizedAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData?[0] else {
+            return 0
+        }
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else {
+            return 0
+        }
+
+        var sumSquares: Float = 0
+        for i in 0..<frameLength {
+            let sample = channelData[i]
+            sumSquares += sample * sample
+        }
+        let rms = sqrt(sumSquares / Float(frameLength))
+        let db = 20 * log10(max(rms, 1e-7))
+        return max(0, min(1, (db + 50) / 50))
+    }
+
     private func startAudioStreaming() throws {
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -176,6 +212,8 @@ final class SpeechAnalyzerRecognitionSession {
             guard let self, let bufferCopy = buffer.copy() as? AVAudioPCMBuffer else {
                 return
             }
+
+            self.emitAudioLevelIfNeeded(from: bufferCopy)
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)
             Task {

@@ -14,6 +14,7 @@ public interface Constants {
     String PARTIAL_RESULTS_EVENT = "partialResults";
     String ERROR_EVENT = "error";
     String READY_FOR_NEXT_SESSION_EVENT = "readyForNextSession";
+    String AUDIO_LEVEL_EVENT = "audioLevel";
     String RECORD_AUDIO_PERMISSION = Manifest.permission.RECORD_AUDIO;
     String LANGUAGE_ERROR = "Could not get list of languages";
     String EXTRA_DICTATE_BEEP = "android.speech.extra.DICTATE_BEEP";

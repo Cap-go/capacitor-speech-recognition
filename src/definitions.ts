@@ -196,6 +196,15 @@ export interface SpeechRecognitionErrorEvent {
 }
 
 /**
+ * Live microphone level while recognition is active.
+ *
+ * `level` is normalized to `0..1` for easy waveform / meter UI.
+ */
+export interface SpeechRecognitionAudioLevelEvent {
+  level: number;
+}
+
+/**
  * Emitted after native resources have been torn down and the plugin is ready for another session.
  */
 export interface SpeechRecognitionReadyEvent {
@@ -381,6 +390,16 @@ export interface SpeechRecognitionPlugin {
   addListener(
     eventName: 'error',
     listenerFunc: (event: SpeechRecognitionErrorEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Listen for live microphone input level while recognition is active.
+   *
+   * Emits roughly 10–20 times per second with a normalized `0..1` level.
+   * No events are emitted when recognition is idle.
+   */
+  addListener(
+    eventName: 'audioLevel',
+    listenerFunc: (event: SpeechRecognitionAudioLevelEvent) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * Listen for the recognizer becoming ready for another session.

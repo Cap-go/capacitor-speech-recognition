@@ -42,7 +42,6 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private let audioEngine = AVAudioEngine()
     private var lastAudioLevelEmitTime: CFTimeInterval = 0
-    private let audioLevelEmitInterval: CFTimeInterval = 1.0 / 15.0
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var speechRecognizer: SFSpeechRecognizer?
@@ -395,7 +394,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
-            self?.emitAudioLevelIfNeeded(from: buffer)
+            self?.emitAudioLevelIfNeeded(from: buffer, sessionId: sessionId)
         }
         hasInstalledTap = true
 
@@ -667,36 +666,18 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
 
-    private func emitAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer) {
+    private func emitAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer, sessionId: Int) {
         let now = CACurrentMediaTime()
-        guard now - lastAudioLevelEmitTime >= audioLevelEmitInterval else {
+        guard AudioLevelMetering.shouldEmit(now: now, lastEmit: &lastAudioLevelEmitTime) else {
             return
         }
-        lastAudioLevelEmitTime = now
-        let level = Self.normalizedAudioLevel(from: buffer)
+        let level = AudioLevelMetering.normalizedAudioLevel(from: buffer)
         DispatchQueue.main.async { [weak self] in
-            self?.notifyListeners("audioLevel", data: ["level": level])
+            guard let self, self.activeSessionId == sessionId else {
+                return
+            }
+            self.notifyListeners("audioLevel", data: ["level": level])
         }
-    }
-
-    private static func normalizedAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {
-        guard let channelData = buffer.floatChannelData?[0] else {
-            return 0
-        }
-        let frameLength = Int(buffer.frameLength)
-        guard frameLength > 0 else {
-            return 0
-        }
-
-        var sumSquares: Float = 0
-        for i in 0..<frameLength {
-            let sample = channelData[i]
-            sumSquares += sample * sample
-        }
-        let rms = sqrt(sumSquares / Float(frameLength))
-        let db = 20 * log10(max(rms, 1e-7))
-        // Map typical speech (~-50 dBFS .. 0 dBFS) into 0..1
-        return max(0, min(1, (db + 50) / 50))
     }
 
     private func buildMatches(from result: SFSpeechRecognitionResult, maxResults: Int) -> [String] {

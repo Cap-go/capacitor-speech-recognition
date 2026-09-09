@@ -86,7 +86,6 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private long sessionId = 0;
     private long recognizerGeneration = 0;
     private String pendingStopReason;
-    private AudioLevelMeter audioLevelMeter;
 
     @Override
     public void load() {
@@ -347,6 +346,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 try {
                     speechRecognizer.stopListening();
                 } catch (Exception ignored) {}
+                // Stop metering immediately (onRmsChanged gated on listening).
+                listening(false);
             }
 
             forceStopRunnable = () -> {
@@ -936,28 +937,6 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
     private void listening(boolean value) {
         listening = value;
-        if (value) {
-            startAudioLevelMeter();
-        } else {
-            stopAudioLevelMeter();
-        }
-    }
-
-    private void startAudioLevelMeter() {
-        stopAudioLevelMeter();
-        audioLevelMeter = new AudioLevelMeter(this, (level) -> {
-            JSObject payload = new JSObject();
-            payload.put("level", level);
-            notifyListeners(AUDIO_LEVEL_EVENT, payload);
-        });
-        audioLevelMeter.start();
-    }
-
-    private void stopAudioLevelMeter() {
-        if (audioLevelMeter != null) {
-            audioLevelMeter.stop();
-            audioLevelMeter = null;
-        }
     }
 
     private void resetPartialResultsCache() {
@@ -1129,7 +1108,17 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         public void onBeginningOfSpeech() {}
 
         @Override
-        public void onRmsChanged(float rmsdB) {}
+        public void onRmsChanged(float rmsdB) {
+            // SpeechRecognizer reports approximate speech energy in dB, typically ~-2..10.
+            // Map that range into the documented audioLevel 0..1 scale.
+            if (!listening) {
+                return;
+            }
+            double level = Math.max(0.0, Math.min(1.0, (rmsdB + 2.0) / 12.0));
+            JSObject payload = new JSObject();
+            payload.put("level", level);
+            notifyListeners(AUDIO_LEVEL_EVENT, payload);
+        }
 
         @Override
         public void onBufferReceived(byte[] buffer) {}

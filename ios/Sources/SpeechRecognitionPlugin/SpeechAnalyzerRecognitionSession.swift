@@ -78,7 +78,6 @@ final class SpeechAnalyzerRecognitionSession {
     var onError: ErrorHandler?
     var onAudioLevel: AudioLevelHandler?
     private var lastAudioLevelEmitTime: CFTimeInterval = 0
-    private let audioLevelEmitInterval: CFTimeInterval = 1.0 / 15.0
 
     var isRunning: Bool {
         audioEngine.isRunning || resultTask != nil || isTearingDown
@@ -168,35 +167,13 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
 
-    private func emitAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer) {
+    /// Compute level off the real-time tap thread; throttle + emit on MainActor.
+    private func emitAudioLevelIfNeeded(level: Float) {
         let now = CACurrentMediaTime()
-        guard now - lastAudioLevelEmitTime >= audioLevelEmitInterval else {
+        guard AudioLevelMetering.shouldEmit(now: now, lastEmit: &lastAudioLevelEmitTime) else {
             return
         }
-        lastAudioLevelEmitTime = now
-        let level = Self.normalizedAudioLevel(from: buffer)
-        Task { @MainActor [weak self] in
-            self?.onAudioLevel?(level)
-        }
-    }
-
-    private static func normalizedAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {
-        guard let channelData = buffer.floatChannelData?[0] else {
-            return 0
-        }
-        let frameLength = Int(buffer.frameLength)
-        guard frameLength > 0 else {
-            return 0
-        }
-
-        var sumSquares: Float = 0
-        for i in 0..<frameLength {
-            let sample = channelData[i]
-            sumSquares += sample * sample
-        }
-        let rms = sqrt(sumSquares / Float(frameLength))
-        let db = 20 * log10(max(rms, 1e-7))
-        return max(0, min(1, (db + 50) / 50))
+        onAudioLevel?(level)
     }
 
     private func startAudioStreaming() throws {
@@ -213,7 +190,10 @@ final class SpeechAnalyzerRecognitionSession {
                 return
             }
 
-            self.emitAudioLevelIfNeeded(from: bufferCopy)
+            let level = AudioLevelMetering.normalizedAudioLevel(from: bufferCopy)
+            Task { @MainActor [weak self] in
+                self?.emitAudioLevelIfNeeded(level: level)
+            }
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)
             Task {

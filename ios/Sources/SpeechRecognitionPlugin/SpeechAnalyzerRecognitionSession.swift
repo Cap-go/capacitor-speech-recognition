@@ -77,7 +77,8 @@ final class SpeechAnalyzerRecognitionSession {
     var onResult: ResultHandler?
     var onError: ErrorHandler?
     var onAudioLevel: AudioLevelHandler?
-    private var lastAudioLevelEmitTime: CFTimeInterval = 0
+    /// Touched from the audio tap thread for emit throttling; only this session writes it.
+    nonisolated(unsafe) private var lastAudioLevelEmitTime: CFTimeInterval = 0
 
     var isRunning: Bool {
         audioEngine.isRunning || resultTask != nil || isTearingDown
@@ -167,15 +168,6 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
 
-    /// Compute level off the real-time tap thread; throttle + emit on MainActor.
-    private func emitAudioLevelIfNeeded(level: Float) {
-        let now = CACurrentMediaTime()
-        guard AudioLevelMetering.shouldEmit(now: now, lastEmit: &lastAudioLevelEmitTime) else {
-            return
-        }
-        onAudioLevel?(level)
-    }
-
     private func startAudioStreaming() throws {
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -190,9 +182,14 @@ final class SpeechAnalyzerRecognitionSession {
                 return
             }
 
-            let level = AudioLevelMetering.normalizedAudioLevel(from: bufferCopy)
-            Task { @MainActor [weak self] in
-                self?.emitAudioLevelIfNeeded(level: level)
+            // Throttle on the tap thread first so we skip RMS/log and MainActor
+            // hops when emitting faster than ~15 Hz.
+            let now = CACurrentMediaTime()
+            if AudioLevelMetering.shouldEmit(now: now, lastEmit: &self.lastAudioLevelEmitTime) {
+                let level = AudioLevelMetering.normalizedAudioLevel(from: bufferCopy)
+                Task { @MainActor [weak self] in
+                    self?.onAudioLevel?(level)
+                }
             }
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)

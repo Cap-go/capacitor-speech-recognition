@@ -431,12 +431,14 @@ final class SpeechAnalyzerRecognitionSession: NSObject {
     typealias ResultHandler = @MainActor ([String], Bool) -> Void
     typealias VoidHandler = @MainActor () -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
+    typealias AudioLevelHandler = @MainActor (Float) -> Void
 
     var isRunning = false
     var onListeningStarted: VoidHandler?
     var onListeningStopped: VoidHandler?
     var onResult: ResultHandler?
     var onError: ErrorHandler?
+    var onAudioLevel: AudioLevelHandler?
 
     init(locale _: Locale, maxResults _: Int, includePartialResults _: Bool) {}
 

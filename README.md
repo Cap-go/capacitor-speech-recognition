@@ -529,6 +529,8 @@ Listen for live microphone input level while recognition is active.
 Emits roughly 10–20 times per second with a normalized `0..1` level.
 No events are emitted when recognition is idle.
 
+iOS and Android only. Web accepts listener registration but does not emit events.
+
 | Param              | Type                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | **`eventName`**    | <code>'audioLevel'</code>                                                                                         |
@@ -722,6 +724,8 @@ Raised whenever native recognition reports an error.
 Live microphone level while recognition is active.
 
 `level` is normalized to `0..1` for easy waveform / meter UI.
+
+Emitted on iOS and Android only. Web accepts listener registration but does not emit events.
 
 | Prop        | Type                |
 | ----------- | ------------------- |

@@ -41,6 +41,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     private let audioEngine = AVAudioEngine()
+    private var lastAudioLevelEmitTime: CFTimeInterval = 0
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var speechRecognizer: SFSpeechRecognizer?
@@ -393,6 +394,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
+            self?.emitAudioLevelIfNeeded(from: buffer, sessionId: sessionId)
         }
         hasInstalledTap = true
 
@@ -478,6 +480,13 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             includePartialResults: options.partialResults
         )
         modernRecognitionSession = session
+
+        session.onAudioLevel = { [weak self, weak session] level in
+            guard let self, let session, self.modernRecognitionSession === session, self.activeSessionId == sessionId else {
+                return
+            }
+            self.notifyListeners("audioLevel", data: ["level": level])
+        }
 
         session.onListeningStarted = { [weak self, weak session] in
             guard let self, let session, self.modernRecognitionSession === session, self.activeSessionId == sessionId else {
@@ -654,6 +663,21 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         finishSessionIfNeeded(sessionId: sessionId, reason: pendingStopReason ?? .error, errorCode: code)
+    }
+
+
+    private func emitAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer, sessionId: Int) {
+        let now = CACurrentMediaTime()
+        guard AudioLevelMetering.shouldEmit(now: now, lastEmit: &lastAudioLevelEmitTime) else {
+            return
+        }
+        let level = AudioLevelMetering.normalizedAudioLevel(from: buffer)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.activeSessionId == sessionId else {
+                return
+            }
+            self.notifyListeners("audioLevel", data: ["level": level])
+        }
     }
 
     private func buildMatches(from result: SFSpeechRecognitionResult, maxResults: Int) -> [String] {

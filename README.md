@@ -218,6 +218,7 @@ Add the following keys to your app `Info.plist`:
 * [`addListener('partialResults', ...)`](#addlistenerpartialresults-)
 * [`addListener('listeningState', ...)`](#addlistenerlisteningstate-)
 * [`addListener('error', ...)`](#addlistenererror-)
+* [`addListener('audioLevel', ...)`](#addlisteneraudiolevel-)
 * [`addListener('readyForNextSession', ...)`](#addlistenerreadyfornextsession-)
 * [`removeAllListeners()`](#removealllisteners)
 * [Interfaces](#interfaces)
@@ -517,6 +518,29 @@ Listen for recognition errors.
 --------------------
 
 
+### addListener('audioLevel', ...)
+
+```typescript
+addListener(eventName: 'audioLevel', listenerFunc: (event: SpeechRecognitionAudioLevelEvent) => void) => Promise<PluginListenerHandle>
+```
+
+Listen for live microphone input level while recognition is active.
+
+Emits roughly 10–20 times per second with a normalized `0..1` level.
+No events are emitted when recognition is idle.
+
+iOS and Android only. Web accepts listener registration but does not emit events.
+
+| Param              | Type                                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| **`eventName`**    | <code>'audioLevel'</code>                                                                                         |
+| **`listenerFunc`** | <code>(event: <a href="#speechrecognitionaudiolevelevent">SpeechRecognitionAudioLevelEvent</a>) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
 ### addListener('readyForNextSession', ...)
 
 ```typescript
@@ -693,6 +717,19 @@ Raised whenever native recognition reports an error.
 | **`code`**      | <code>string</code> |
 | **`message`**   | <code>string</code> |
 | **`sessionId`** | <code>number</code> |
+
+
+#### SpeechRecognitionAudioLevelEvent
+
+Live microphone level while recognition is active.
+
+`level` is normalized to `0..1` for easy waveform / meter UI.
+
+Emitted on iOS and Android only. Web accepts listener registration but does not emit events.
+
+| Prop        | Type                |
+| ----------- | ------------------- |
+| **`level`** | <code>number</code> |
 
 
 #### SpeechRecognitionReadyEvent

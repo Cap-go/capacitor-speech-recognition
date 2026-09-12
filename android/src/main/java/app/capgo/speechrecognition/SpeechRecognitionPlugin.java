@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.speech.ModelDownloadListener;
 import android.speech.RecognitionListener;
 import android.speech.RecognitionSupport;
@@ -46,6 +47,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private static final int FORCE_STOP_TIMEOUT_MS = 1500;
     private static final int STOP_FALLBACK_TIMEOUT_MS = 500;
     private static final int CONTINUOUS_RESTART_DELAY_MS = 100;
+    /** Target audioLevel emit rate (~15 Hz), matching the public docs. */
+    private static final long AUDIO_LEVEL_EMIT_INTERVAL_MS = 67;
 
     private enum ListeningState {
         IDLE,
@@ -60,6 +63,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private final ReentrantLock lock = new ReentrantLock();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean listening = false;
+    private long lastAudioLevelEmitElapsedMs = 0;
     private JSONArray previousPartialResults = new JSONArray();
 
     private Runnable forceStopRunnable;
@@ -346,6 +350,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 try {
                     speechRecognizer.stopListening();
                 } catch (Exception ignored) {}
+                // Stop metering immediately (onRmsChanged gated on listening).
+                listening(false);
             }
 
             forceStopRunnable = () -> {
@@ -1106,7 +1112,22 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         public void onBeginningOfSpeech() {}
 
         @Override
-        public void onRmsChanged(float rmsdB) {}
+        public void onRmsChanged(float rmsdB) {
+            // SpeechRecognizer reports approximate speech energy in dB, typically ~-2..10.
+            // Map that range into the documented audioLevel 0..1 scale.
+            if (isStale() || !listening) {
+                return;
+            }
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastAudioLevelEmitElapsedMs < AUDIO_LEVEL_EMIT_INTERVAL_MS) {
+                return;
+            }
+            lastAudioLevelEmitElapsedMs = now;
+            double level = Math.max(0.0, Math.min(1.0, (rmsdB + 2.0) / 12.0));
+            JSObject payload = new JSObject();
+            payload.put("level", level);
+            notifyListeners(AUDIO_LEVEL_EVENT, payload);
+        }
 
         @Override
         public void onBufferReceived(byte[] buffer) {}

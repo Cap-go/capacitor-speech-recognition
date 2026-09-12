@@ -52,6 +52,7 @@ final class SpeechAnalyzerRecognitionSession {
     typealias ResultHandler = @MainActor ([String], Bool) -> Void
     typealias VoidHandler = @MainActor () -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
+    typealias AudioLevelHandler = @MainActor (Float) -> Void
 
     private static let microphoneTapBufferSize: AVAudioFrameCount = 2048
 
@@ -75,6 +76,9 @@ final class SpeechAnalyzerRecognitionSession {
     var onListeningStopped: VoidHandler?
     var onResult: ResultHandler?
     var onError: ErrorHandler?
+    var onAudioLevel: AudioLevelHandler?
+    /// Touched from the audio tap thread for emit throttling; only this session writes it.
+    nonisolated(unsafe) private var lastAudioLevelEmitTime: CFTimeInterval = 0
 
     var isRunning: Bool {
         audioEngine.isRunning || resultTask != nil || isTearingDown
@@ -163,6 +167,7 @@ final class SpeechAnalyzerRecognitionSession {
         isAudioSessionActive = true
     }
 
+
     private func startAudioStreaming() throws {
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -175,6 +180,16 @@ final class SpeechAnalyzerRecognitionSession {
         ) { [weak self] buffer, _ in
             guard let self, let bufferCopy = buffer.copy() as? AVAudioPCMBuffer else {
                 return
+            }
+
+            // Throttle on the tap thread first so we skip RMS/log and MainActor
+            // hops when emitting faster than ~15 Hz.
+            let now = CACurrentMediaTime()
+            if AudioLevelMetering.shouldEmit(now: now, lastEmit: &self.lastAudioLevelEmitTime) {
+                let level = AudioLevelMetering.normalizedAudioLevel(from: bufferCopy)
+                Task { @MainActor [weak self] in
+                    self?.onAudioLevel?(level)
+                }
             }
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)
@@ -416,12 +431,14 @@ final class SpeechAnalyzerRecognitionSession: NSObject {
     typealias ResultHandler = @MainActor ([String], Bool) -> Void
     typealias VoidHandler = @MainActor () -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
+    typealias AudioLevelHandler = @MainActor (Float) -> Void
 
     var isRunning = false
     var onListeningStarted: VoidHandler?
     var onListeningStopped: VoidHandler?
     var onResult: ResultHandler?
     var onError: ErrorHandler?
+    var onAudioLevel: AudioLevelHandler?
 
     init(locale _: Locale, maxResults _: Int, includePartialResults _: Bool) {}
 

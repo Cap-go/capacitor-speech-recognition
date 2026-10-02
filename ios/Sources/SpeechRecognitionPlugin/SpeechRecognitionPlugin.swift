@@ -477,7 +477,8 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         let session = SpeechAnalyzerRecognitionSession(
             locale: locale,
             maxResults: options.maxResults,
-            includePartialResults: options.partialResults
+            includePartialResults: options.partialResults,
+            contextualStrings: options.contextualStrings
         )
         modernRecognitionSession = session
 

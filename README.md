@@ -1,21 +1,37 @@
 # @capgo/capacitor-speech-recognition
-<a href="https://capgo.app/"><img src="https://capgo.app/readme-banner.svg?repo=Cap-go/capacitor-speech-recognition" alt="Capgo - Instant updates for Capacitor" /></a>
+
+Turn speech into text in your Capacitor app with low latency, live partial results and the native recognizers on iOS and Android.
+
+<a href="https://capgo.app/?ref=plugin_speech_recognition"><img src="https://capgo.app/readme-banner.svg?repo=Cap-go/capacitor-speech-recognition" alt="Capgo - Instant updates for Capacitor" /></a>
 
 <div align="center">
-  <h2><a href="https://capgo.app/?ref=plugin_speech_recognition"> ➡️ Get Instant updates for your App with Capgo</a></h2>
-  <h2><a href="https://capgo.app/consulting/?ref=plugin_speech_recognition"> Missing a feature? We’ll build the plugin for you 💪</a></h2>
+  <p><b>Capgo</b>: open-source live updates for Ionic and Capacitor apps. Ship OTA fixes and features instantly, without waiting for app store review.</p>
+  <h2><a href="https://capgo.app/register/?ref=plugin_speech_recognition">➡️ Get started for free</a></h2>
+  <p>14-day unlimited free trial. No credit card required</p>
+  <p><a href="https://capgo.app/consulting/?ref=plugin_speech_recognition">Missing a feature? We'll build the plugin for you 💪</a></p>
 </div>
 
-Natural, low-latency speech recognition for Capacitor apps with parity across iOS and Android, streaming partial results, and permission helpers baked in.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Cap-go/capacitor-speech-recognition/main/assets/github-social-preview.png" alt="@capgo/capacitor-speech-recognition for Capacitor apps" width="300" />
+</p>
+
+## Key features
+
+- **Live transcription**: `start()` streams `partialResults` while the user speaks, `stop()` and `forceStop()` end it.
+- **Languages**: `getSupportedLanguages()` and `isOnDeviceRecognitionAvailable()` for offline recognition.
+- **Accuracy options**: punctuation on iOS 16 and later and contextual strings for domain words.
+- **Push to talk**: `setPTTState()` keeps a session going while the button is held.
+- **Events and permissions**: `listeningState`, `audioLevel` and `error` events, plus microphone and speech permission helpers.
+- **Platforms**: iOS and Android. iOS uses the Speech framework, Android uses `SpeechRecognizer`. Segmented results are Android only. Not available on web.
 
 ## Why this plugin?
 
 This package starts from the excellent [`capacitor-community/speech-recognition`](https://github.com/capacitor-community/speech-recognition) plugin, but folds in the most requested pull requests from that repo (punctuation support, segmented sessions, crash fixes) and keeps them maintained under the Capgo umbrella. You get the familiar API plus:
 
-- ✅ **Merged community PRs** – punctuation toggles on iOS (PR #74), segmented results & silence handling on Android (PR #104), and the `recognitionRequest` safety fix (PR #105) ship out-of-the-box.
-- 🚀 **New Capgo features** – configurable silence windows, streaming segment listeners, consistent permission helpers, and a refreshed example app.
-- 🛠️ **Active maintenance** – same conventions as all Capgo plugins (SPM, Podspec, workflows, example app) so it tracks Capacitor major versions without bit-rot.
-- 📦 **Drop-in migration** – TypeScript definitions remain compatible with the community plugin while exposing the extra options (`addPunctuation`, `allowForSilence`, `segmentResults`, etc.).
+- ✅ **Merged community PRs**, punctuation toggles on iOS (PR #74), segmented results & silence handling on Android (PR #104), and the `recognitionRequest` safety fix (PR #105) ship out-of-the-box.
+- 🚀 **New Capgo features**, configurable silence windows, streaming segment listeners, consistent permission helpers, and a refreshed example app.
+- 🛠️ **Active maintenance**, same conventions as all Capgo plugins (SPM, Podspec, workflows, example app) so it tracks Capacitor major versions without bit-rot.
+- 📦 **Drop-in migration**, TypeScript definitions remain compatible with the community plugin while exposing the extra options (`addPunctuation`, `allowForSilence`, `segmentResults`, etc.).
 
 ## Documentation
 

@@ -17,10 +17,10 @@ Turn speech into text in your Capacitor app with low latency, live partial resul
 
 ## Key features
 
-- **Live transcription**: `start()` streams `partialResults` while the user speaks, `stop()` and `forceStop()` end it.
-- **Languages**: `getSupportedLanguages()` and `isOnDeviceRecognitionAvailable()` for offline recognition.
+- **Live transcription**: with `partialResults: true`, `start()` streams updates while the user speaks. `stop()` and `forceStop()` end the session.
+- **Languages and on-device mode**: `getSupportedLanguages()` lists locales, `isOnDeviceRecognitionAvailable()` checks on-device support and `useOnDeviceRecognition: true` opts in.
 - **Accuracy options**: punctuation on iOS 16 and later and contextual strings for domain words.
-- **Push to talk**: `setPTTState()` keeps a session going while the button is held.
+- **Push to talk**: `setPTTState()` reports whether the button is held, for use with `continuousPTT` or your own hold-to-talk flow.
 - **Events and permissions**: `listeningState`, `audioLevel` and `error` events, plus microphone and speech permission helpers.
 - **Platforms**: iOS and Android. iOS uses the Speech framework, Android uses `SpeechRecognizer`. Segmented results are Android only. Not available on web.
 

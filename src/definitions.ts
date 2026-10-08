@@ -49,7 +49,11 @@ export interface SpeechRecognitionStartOptions {
    * `preferLegacyRecognizer` — so contextual strings and on-device recognition can
    * be used together.
    *
-   * Ignored by Android and by the iOS 26+ `SpeechAnalyzer` path.
+   * On iOS 26+, when the plugin uses the `SpeechAnalyzer` path, the same strings
+   * are passed through `AnalysisContext.contextualStrings` via
+   * `SpeechAnalyzer.setContext(_:)`.
+   *
+   * Ignored by Android.
    */
   contextualStrings?: string[];
   /**

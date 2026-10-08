@@ -59,6 +59,7 @@ final class SpeechAnalyzerRecognitionSession {
     private let locale: Locale
     private let maxResults: Int
     private let includePartialResults: Bool
+    private let contextualStrings: [String]
     private let processingActor = SpeechAnalyzerAudioProcessingActor()
     private let modelManager = SpeechAnalyzerModelManager()
 
@@ -84,10 +85,11 @@ final class SpeechAnalyzerRecognitionSession {
         audioEngine.isRunning || resultTask != nil || isTearingDown
     }
 
-    init(locale: Locale, maxResults: Int, includePartialResults: Bool) {
+    init(locale: Locale, maxResults: Int, includePartialResults: Bool, contextualStrings: [String] = []) {
         self.locale = locale
         self.maxResults = maxResults
         self.includePartialResults = includePartialResults
+        self.contextualStrings = contextualStrings
     }
 
     func start() async throws {
@@ -121,6 +123,12 @@ final class SpeechAnalyzerRecognitionSession {
 
         let analyzer = SpeechAnalyzer(modules: modules)
         self.analyzer = analyzer
+
+        if !contextualStrings.isEmpty {
+            let analysisContext = AnalysisContext()
+            analysisContext.contextualStrings[.general] = contextualStrings
+            try await analyzer.setContext(analysisContext)
+        }
 
         let (inputSequence, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
         analyzerInputContinuation = inputContinuation
@@ -440,7 +448,7 @@ final class SpeechAnalyzerRecognitionSession: NSObject {
     var onError: ErrorHandler?
     var onAudioLevel: AudioLevelHandler?
 
-    init(locale _: Locale, maxResults _: Int, includePartialResults _: Bool) {}
+    init(locale _: Locale, maxResults _: Int, includePartialResults _: Bool, contextualStrings _: [String] = []) {}
 
     func start() async throws {
         throw SpeechAnalyzerRecognitionError.unavailable

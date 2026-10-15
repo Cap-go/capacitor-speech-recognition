@@ -1,5 +1,6 @@
 package app.capgo.speechrecognition;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -24,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -87,9 +89,9 @@ public class SpeechRecognitionPluginMainThreadTest {
         PluginCall call = mock(PluginCall.class);
         when(call.getString(eq("language"), any())).thenReturn("de-DE");
 
-        AtomicBoolean resolved = new AtomicBoolean(false);
+        AtomicInteger resolveCount = new AtomicInteger(0);
         doAnswer((invocation) -> {
-            resolved.set(true);
+            resolveCount.incrementAndGet();
             return null;
         })
             .when(call)
@@ -108,7 +110,7 @@ public class SpeechRecognitionPluginMainThreadTest {
             "SpeechRecognizer.createOnDeviceSpeechRecognizer must run on the main thread",
             ShadowSpeechRecognizerForThreadCheck.createdOnMainThread.get()
         );
-        assertTrue("Plugin call should resolve exactly once", resolved.get());
+        assertEquals("Plugin call should resolve exactly once", 1, resolveCount.get());
     }
 
     private static void setBridge(SpeechRecognitionPlugin plugin, Bridge bridge) throws Exception {
@@ -138,7 +140,10 @@ public class SpeechRecognitionPluginMainThreadTest {
             doAnswer((invocation) -> {
                 Executor executor = invocation.getArgument(1);
                 RecognitionSupportCallback callback = invocation.getArgument(2);
-                executor.execute(() -> callback.onError(SpeechRecognizer.ERROR_CLIENT));
+                executor.execute(() -> {
+                    callback.onError(SpeechRecognizer.ERROR_CLIENT);
+                    callback.onError(SpeechRecognizer.ERROR_CLIENT);
+                });
                 return null;
             })
                 .when(recognizer)

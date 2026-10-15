@@ -95,15 +95,17 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     @Override
     public void load() {
         super.load();
-        bridge.getWebView().post(() -> {
-            try {
-                lock.lock();
-                recreateIdleRecognizerLocked();
-                Logger.info(getLogTag(), "Instantiated SpeechRecognizer in load()");
-            } finally {
-                lock.unlock();
-            }
-        });
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
+                    recreateIdleRecognizerLocked();
+                    Logger.info(getLogTag(), "Instantiated SpeechRecognizer in load()");
+                } finally {
+                    lock.unlock();
+                }
+            });
     }
 
     @PluginMethod
@@ -315,21 +317,23 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        bridge.getWebView().post(() -> {
-            try {
-                lock.lock();
-                cancelPendingForceStopLocked();
-                if (speechRecognizer != null) {
-                    try {
-                        speechRecognizer.stopListening();
-                    } catch (Exception ignored) {}
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
+                    cancelPendingForceStopLocked();
+                    if (speechRecognizer != null) {
+                        try {
+                            speechRecognizer.stopListening();
+                        } catch (Exception ignored) {}
+                    }
+                    listening(false);
+                    scheduleFinishFallbackLocked(currentSessionId, "userStop", null, STOP_FALLBACK_TIMEOUT_MS);
+                } finally {
+                    lock.unlock();
                 }
-                listening(false);
-                scheduleFinishFallbackLocked(currentSessionId, "userStop", null, STOP_FALLBACK_TIMEOUT_MS);
-            } finally {
-                lock.unlock();
-            }
-        });
+            });
         call.resolve();
     }
 
@@ -408,18 +412,20 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        bridge.getWebView().post(() -> {
-            try {
-                lock.lock();
-                if (speechRecognizer != null) {
-                    try {
-                        speechRecognizer.stopListening();
-                    } catch (Exception ignored) {}
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
+                    if (speechRecognizer != null) {
+                        try {
+                            speechRecognizer.stopListening();
+                        } catch (Exception ignored) {}
+                    }
+                } finally {
+                    lock.unlock();
                 }
-            } finally {
-                lock.unlock();
-            }
-        });
+            });
         call.resolve();
     }
 
@@ -575,35 +581,37 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        bridge.getWebView().post(() -> {
-            try {
-                lock.lock();
-                if (currentSessionId != sessionId) {
-                    return;
-                }
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
+                    if (currentSessionId != sessionId) {
+                        return;
+                    }
 
-                resetPartialResultsCache();
-                rebuildRecognizerLocked(call, partialResults, useOnDeviceRecognition, currentSessionId);
-                if (!partialResults && call != null) {
-                    activeStartCall = call;
-                }
+                    resetPartialResultsCache();
+                    rebuildRecognizerLocked(call, partialResults, useOnDeviceRecognition, currentSessionId);
+                    if (!partialResults && call != null) {
+                        activeStartCall = call;
+                    }
 
-                if (useOnDeviceRecognition) {
-                    beginOnDeviceListening(intent, language, partialResults, call, currentSessionId, restarting);
-                } else {
-                    startInlineListening(intent, partialResults, call, currentSessionId, restarting);
+                    if (useOnDeviceRecognition) {
+                        beginOnDeviceListening(intent, language, partialResults, call, currentSessionId, restarting);
+                    } else {
+                        startInlineListening(intent, partialResults, call, currentSessionId, restarting);
+                    }
+                } catch (Exception ex) {
+                    Logger.error(TAG, "Error starting listening", ex);
+                    if (call != null) {
+                        call.reject(ex.getMessage());
+                    }
+                    emitErrorEvent("START_FAILED", ex.getMessage(), currentSessionId);
+                    finishSession(currentSessionId, "error", "START_FAILED");
+                } finally {
+                    lock.unlock();
                 }
-            } catch (Exception ex) {
-                Logger.error(TAG, "Error starting listening", ex);
-                if (call != null) {
-                    call.reject(ex.getMessage());
-                }
-                emitErrorEvent("START_FAILED", ex.getMessage(), currentSessionId);
-                finishSession(currentSessionId, "error", "START_FAILED");
-            } finally {
-                lock.unlock();
-            }
-        });
+            });
     }
 
     private Intent buildRecognizerIntent(
@@ -776,17 +784,20 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             lock.unlock();
         }
         speechRecognizer.startListening(intent);
-        handler.postDelayed(() -> {
-            try {
-                lock.lock();
-                if (currentSessionId != sessionId) {
-                    return;
+        handler.postDelayed(
+            () -> {
+                try {
+                    lock.lock();
+                    if (currentSessionId != sessionId) {
+                        return;
+                    }
+                    restoreRecognizerBeepIfNeededLocked(muteGeneration);
+                } finally {
+                    lock.unlock();
                 }
-                restoreRecognizerBeepIfNeededLocked(muteGeneration);
-            } finally {
-                lock.unlock();
-            }
-        }, 750);
+            },
+            750
+        );
         listening(true);
         state = ListeningState.STARTED;
         emitListeningState("started", currentSessionId, restarting ? "results" : "userStart", null, "started");
@@ -797,29 +808,32 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private void scheduleContinuousRestart(long currentSessionId) {
-        handler.postDelayed(() -> {
-            try {
-                lock.lock();
-                if (currentSessionId != sessionId || !continuousPTTMode || !pttButtonHeld || pendingStopReason != null) {
-                    return;
+        handler.postDelayed(
+            () -> {
+                try {
+                    lock.lock();
+                    if (currentSessionId != sessionId || !continuousPTTMode || !pttButtonHeld || pendingStopReason != null) {
+                        return;
+                    }
+                } finally {
+                    lock.unlock();
                 }
-            } finally {
-                lock.unlock();
-            }
 
-            beginListening(
-                lastLanguage,
-                lastMaxResults,
-                lastPrompt,
-                lastPartialResults,
-                false,
-                null,
-                lastAllowForSilence,
-                lastUseOnDeviceRecognition,
-                currentSessionId,
-                true
-            );
-        }, CONTINUOUS_RESTART_DELAY_MS);
+                beginListening(
+                    lastLanguage,
+                    lastMaxResults,
+                    lastPrompt,
+                    lastPartialResults,
+                    false,
+                    null,
+                    lastAllowForSilence,
+                    lastUseOnDeviceRecognition,
+                    currentSessionId,
+                    true
+                );
+            },
+            CONTINUOUS_RESTART_DELAY_MS
+        );
     }
 
     private void finishSession(long finishedSessionId, String explicitReason, String errorCode) {
@@ -908,19 +922,22 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     }
 
     private void scheduleFinishFallbackLocked(long currentSessionId, String reason, String errorCode, int delayMs) {
-        handler.postDelayed(() -> {
-            boolean shouldFinish;
-            try {
-                lock.lock();
-                shouldFinish = currentSessionId == sessionId && state != ListeningState.IDLE;
-            } finally {
-                lock.unlock();
-            }
+        handler.postDelayed(
+            () -> {
+                boolean shouldFinish;
+                try {
+                    lock.lock();
+                    shouldFinish = currentSessionId == sessionId && state != ListeningState.IDLE;
+                } finally {
+                    lock.unlock();
+                }
 
-            if (shouldFinish) {
-                finishSession(currentSessionId, reason, errorCode);
-            }
-        }, delayMs);
+                if (shouldFinish) {
+                    finishSession(currentSessionId, reason, errorCode);
+                }
+            },
+            delayMs
+        );
     }
 
     private JSObject buildForcedPartialResultLocked() {
@@ -1192,12 +1209,11 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 call.reject(errorMessage);
             }
 
-            String reason =
-                pendingStopReason != null
-                    ? pendingStopReason
-                    : error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                      ? "silence"
-                      : "error";
+            String reason = pendingStopReason != null
+                ? pendingStopReason
+                : error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    ? "silence"
+                    : "error";
             finishSession(listenerSessionId, reason, errorCode);
         }
 

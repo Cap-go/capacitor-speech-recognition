@@ -136,26 +136,31 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
 
         Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, true);
-        supportChecker.checkRecognitionSupport(
-            intent,
-            mainExecutor(),
-            new RecognitionSupportCallback() {
-                @Override
-                public void onSupportResult(RecognitionSupport support) {
-                    boolean available =
-                        isLanguageSupported(language, support.getInstalledOnDeviceLanguages()) ||
-                        isLanguageSupported(language, support.getSupportedOnDeviceLanguages()) ||
-                        isLanguageSupported(language, support.getPendingOnDeviceLanguages());
-                    finishOnDeviceAvailabilityCheck(supportChecker, call, finished, available);
-                }
+        try {
+            supportChecker.checkRecognitionSupport(
+                intent,
+                mainExecutor(),
+                new RecognitionSupportCallback() {
+                    @Override
+                    public void onSupportResult(RecognitionSupport support) {
+                        boolean available =
+                            isLanguageSupported(language, support.getInstalledOnDeviceLanguages()) ||
+                            isLanguageSupported(language, support.getSupportedOnDeviceLanguages()) ||
+                            isLanguageSupported(language, support.getPendingOnDeviceLanguages());
+                        finishOnDeviceAvailabilityCheck(supportChecker, call, finished, available);
+                    }
 
-                @Override
-                public void onError(int error) {
-                    Logger.warn(TAG, "On-device recognition support check failed: " + getErrorText(error));
-                    finishOnDeviceAvailabilityCheck(supportChecker, call, finished, false);
+                    @Override
+                    public void onError(int error) {
+                        Logger.warn(TAG, "On-device recognition support check failed: " + getErrorText(error));
+                        finishOnDeviceAvailabilityCheck(supportChecker, call, finished, false);
+                    }
                 }
-            }
-        );
+            );
+        } catch (RuntimeException ex) {
+            Logger.warn(TAG, "On-device recognition support check failed synchronously: " + ex.getMessage());
+            finishOnDeviceAvailabilityCheck(supportChecker, call, finished, false);
+        }
     }
 
     private void finishOnDeviceAvailabilityCheck(

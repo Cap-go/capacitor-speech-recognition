@@ -113,6 +113,67 @@ public class SpeechRecognitionPluginMainThreadTest {
         assertEquals("Plugin call should resolve exactly once", 1, resolveCount.get());
     }
 
+    @Test
+    public void isOnDeviceRecognitionAvailable_resolvesWhenCheckRecognitionSupportThrows() throws Exception {
+        ShadowSpeechRecognizerForThreadCheck.throwOnCheckRecognitionSupport.set(true);
+
+        AppCompatActivity activity = mock(AppCompatActivity.class);
+        Context appContext = RuntimeEnvironment.getApplication();
+        when(activity.getApplicationContext()).thenReturn(appContext);
+        when(activity.getPackageName()).thenReturn("app.capgo.speechrecognition.test");
+        doAnswer((invocation) -> {
+            Runnable runnable = invocation.getArgument(0);
+            runnable.run();
+            return null;
+        })
+            .when(activity)
+            .runOnUiThread(any());
+        Bridge bridge = mock(Bridge.class);
+        when(bridge.getActivity()).thenReturn(activity);
+        when(bridge.getContext()).thenReturn(appContext);
+        doAnswer((invocation) -> {
+            Runnable runnable = invocation.getArgument(0);
+            new Handler(Looper.getMainLooper()).post(runnable);
+            return null;
+        })
+            .when(bridge)
+            .executeOnMainThread(any());
+
+        SpeechRecognitionPlugin plugin = new SpeechRecognitionPlugin();
+        setBridge(plugin, bridge);
+
+        PluginCall call = mock(PluginCall.class);
+        when(call.getString(eq("language"), any())).thenReturn("de-DE");
+
+        AtomicInteger resolveCount = new AtomicInteger(0);
+        AtomicBoolean resolvedAvailable = new AtomicBoolean(true);
+        doAnswer((invocation) -> {
+            resolveCount.incrementAndGet();
+            JSObject result = invocation.getArgument(0);
+            resolvedAvailable.set(result.getBool("available", true));
+            return null;
+        })
+            .when(call)
+            .resolve(any(JSObject.class));
+
+        CountDownLatch invoked = new CountDownLatch(1);
+        pluginHandler.post(() -> {
+            plugin.isOnDeviceRecognitionAvailable(call);
+            invoked.countDown();
+        });
+        assertTrue(invoked.await(5, TimeUnit.SECONDS));
+
+        org.robolectric.shadows.ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+
+        assertEquals("Plugin call should resolve exactly once", 1, resolveCount.get());
+        assertEquals("Availability should be false when support check throws", false, resolvedAvailable.get());
+        assertEquals(
+            "Temporary support checker should be destroyed",
+            1,
+            ShadowSpeechRecognizerForThreadCheck.destroyCount.get()
+        );
+    }
+
     private static void setBridge(SpeechRecognitionPlugin plugin, Bridge bridge) throws Exception {
         Field bridgeField = com.getcapacitor.Plugin.class.getDeclaredField("bridge");
         bridgeField.setAccessible(true);
@@ -123,9 +184,13 @@ public class SpeechRecognitionPluginMainThreadTest {
     public static class ShadowSpeechRecognizerForThreadCheck {
 
         static final AtomicBoolean createdOnMainThread = new AtomicBoolean(false);
+        static final AtomicBoolean throwOnCheckRecognitionSupport = new AtomicBoolean(false);
+        static final AtomicInteger destroyCount = new AtomicInteger(0);
 
         static void reset() {
             createdOnMainThread.set(false);
+            throwOnCheckRecognitionSupport.set(false);
+            destroyCount.set(0);
         }
 
         @Implementation
@@ -138,6 +203,9 @@ public class SpeechRecognitionPluginMainThreadTest {
             createdOnMainThread.set(Looper.myLooper() == Looper.getMainLooper());
             SpeechRecognizer recognizer = mock(SpeechRecognizer.class);
             doAnswer((invocation) -> {
+                if (throwOnCheckRecognitionSupport.get()) {
+                    throw new IllegalStateException("synchronous support check failure");
+                }
                 Executor executor = invocation.getArgument(1);
                 RecognitionSupportCallback callback = invocation.getArgument(2);
                 executor.execute(() -> {
@@ -148,6 +216,12 @@ public class SpeechRecognitionPluginMainThreadTest {
             })
                 .when(recognizer)
                 .checkRecognitionSupport(any(Intent.class), any(Executor.class), any(RecognitionSupportCallback.class));
+            doAnswer((invocation) -> {
+                destroyCount.incrementAndGet();
+                return null;
+            })
+                .when(recognizer)
+                .destroy();
             return recognizer;
         }
     }

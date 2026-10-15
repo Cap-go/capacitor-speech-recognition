@@ -8,7 +8,6 @@ Turn speech into text in your Capacitor app with low latency, live partial resul
   <p><b>Capgo</b>: push fixes to your Capacitor users in minutes, build signed iOS and Android apps without a Mac, and roll back in one click.</p>
   <h2><a href="https://capgo.app/register/?ref=plugin_speech_recognition">➡️ Get started for free</a></h2>
   <p>14-day unlimited free trial. No credit card required</p>
-  <p><a href="https://capgo.app/consulting/?ref=plugin_speech_recognition">Missing a feature? We'll build the plugin for you 💪</a></p>
 </div>
 
 > 🤖 **Building with an AI coding agent?** Install [Capgo skills](https://capgo.app/skills/?ref=plugin_speech_recognition) so Claude Code, Codex, Cursor, Copilot, or Gemini CLI know how to install and use `@capgo/capacitor-speech-recognition` in your Capacitor app: `npx skills add Cap-go/capgo-skills`. Then ask your agent: *"Add @capgo/capacitor-speech-recognition to my Capacitor app and wire it up."* [Agent setup guides](https://capgo.app/agents/?ref=plugin_speech_recognition) · [Hosted MCP](https://capgo.app/docs/ai/mcp/?ref=plugin_speech_recognition)
@@ -768,7 +767,9 @@ Emitted after native resources have been torn down and the plugin is ready for a
 
 From T, pick a set of properties whose keys are in the union K
 
-<code>{ [P in K]: T[P]; }</code>
+<code>{
+ [P in K]: T[P];
+ }</code>
 
 
 #### PermissionState

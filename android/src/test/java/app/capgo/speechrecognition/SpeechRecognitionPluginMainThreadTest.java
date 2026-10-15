@@ -150,7 +150,7 @@ public class SpeechRecognitionPluginMainThreadTest {
         doAnswer((invocation) -> {
             resolveCount.incrementAndGet();
             JSObject result = invocation.getArgument(0);
-            resolvedAvailable.set(result.getBool("available", true));
+            resolvedAvailable.set(result.getBoolean("available"));
             return null;
         })
             .when(call)
@@ -167,11 +167,7 @@ public class SpeechRecognitionPluginMainThreadTest {
 
         assertEquals("Plugin call should resolve exactly once", 1, resolveCount.get());
         assertEquals("Availability should be false when support check throws", false, resolvedAvailable.get());
-        assertEquals(
-            "Temporary support checker should be destroyed",
-            1,
-            ShadowSpeechRecognizerForThreadCheck.destroyCount.get()
-        );
+        assertEquals("Temporary support checker should be destroyed", 1, ShadowSpeechRecognizerForThreadCheck.destroyCount.get());
     }
 
     private static void setBridge(SpeechRecognitionPlugin plugin, Bridge bridge) throws Exception {

@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import org.json.JSONArray;
 
@@ -115,12 +116,17 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
     @PluginMethod
     public void isOnDeviceRecognitionAvailable(PluginCall call) {
+        bridge.executeOnMainThread(() -> checkOnDeviceRecognitionAvailable(call));
+    }
+
+    private void checkOnDeviceRecognitionAvailable(PluginCall call) {
         String language = call.getString("language", Locale.getDefault().toLanguageTag());
         if (!canUseOnDeviceRecognition()) {
             call.resolve(new JSObject().put("available", false));
             return;
         }
 
+        final AtomicBoolean finished = new AtomicBoolean(false);
         final SpeechRecognizer supportChecker;
         try {
             supportChecker = SpeechRecognizer.createOnDeviceSpeechRecognizer(bridge.getActivity());
@@ -130,28 +136,47 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         }
 
         Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, true);
-        supportChecker.checkRecognitionSupport(
-            intent,
-            mainExecutor(),
-            new RecognitionSupportCallback() {
-                @Override
-                public void onSupportResult(RecognitionSupport support) {
-                    boolean available =
-                        isLanguageSupported(language, support.getInstalledOnDeviceLanguages()) ||
-                        isLanguageSupported(language, support.getSupportedOnDeviceLanguages()) ||
-                        isLanguageSupported(language, support.getPendingOnDeviceLanguages());
-                    supportChecker.destroy();
-                    call.resolve(new JSObject().put("available", available));
-                }
+        try {
+            supportChecker.checkRecognitionSupport(
+                intent,
+                mainExecutor(),
+                new RecognitionSupportCallback() {
+                    @Override
+                    public void onSupportResult(RecognitionSupport support) {
+                        boolean available =
+                            isLanguageSupported(language, support.getInstalledOnDeviceLanguages()) ||
+                            isLanguageSupported(language, support.getSupportedOnDeviceLanguages()) ||
+                            isLanguageSupported(language, support.getPendingOnDeviceLanguages());
+                        finishOnDeviceAvailabilityCheck(supportChecker, call, finished, available);
+                    }
 
-                @Override
-                public void onError(int error) {
-                    Logger.warn(TAG, "On-device recognition support check failed: " + getErrorText(error));
-                    supportChecker.destroy();
-                    call.resolve(new JSObject().put("available", false));
+                    @Override
+                    public void onError(int error) {
+                        Logger.warn(TAG, "On-device recognition support check failed: " + getErrorText(error));
+                        finishOnDeviceAvailabilityCheck(supportChecker, call, finished, false);
+                    }
                 }
-            }
-        );
+            );
+        } catch (RuntimeException ex) {
+            Logger.warn(TAG, "On-device recognition support check failed synchronously: " + ex.getMessage());
+            finishOnDeviceAvailabilityCheck(supportChecker, call, finished, false);
+        }
+    }
+
+    private void finishOnDeviceAvailabilityCheck(
+        SpeechRecognizer supportChecker,
+        PluginCall call,
+        AtomicBoolean finished,
+        boolean available
+    ) {
+        if (!finished.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            supportChecker.destroy();
+        } catch (Exception ignored) {}
+        call.resolve(new JSObject().put("available", available));
     }
 
     @PluginMethod
@@ -347,9 +372,6 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
             cancelPendingForceStopLocked();
             if (!popupActive && speechRecognizer != null) {
-                try {
-                    speechRecognizer.stopListening();
-                } catch (Exception ignored) {}
                 // Stop metering immediately (onRmsChanged gated on listening).
                 listening(false);
             }
@@ -395,6 +417,21 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
+        bridge
+            .getWebView()
+            .post(() -> {
+                try {
+                    lock.lock();
+                    // Do not gate on pendingStopReason: setPTTState can clear it while STOPPING.
+                    if (currentSessionId == sessionId && state == ListeningState.STOPPING && speechRecognizer != null) {
+                        try {
+                            speechRecognizer.stopListening();
+                        } catch (Exception ignored) {}
+                    }
+                } finally {
+                    lock.unlock();
+                }
+            });
         call.resolve();
     }
 
@@ -817,7 +854,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                     return;
                 }
 
-                reason = explicitReason != null ? explicitReason : (pendingStopReason != null ? pendingStopReason : "unknown");
+                reason = explicitReason != null ? explicitReason : pendingStopReason != null ? pendingStopReason : "unknown";
                 if (state != ListeningState.STOPPING) {
                     state = ListeningState.STOPPING;
                     emitListeningState("stoppingListening", finishedSessionId, reason, errorCode, null);
@@ -1180,7 +1217,9 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
             String reason = pendingStopReason != null
                 ? pendingStopReason
-                : (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ? "silence" : "error");
+                : error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    ? "silence"
+                    : "error";
             finishSession(listenerSessionId, reason, errorCode);
         }
 

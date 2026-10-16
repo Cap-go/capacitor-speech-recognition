@@ -39,7 +39,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 
-/** Verifies on-device availability checks run SpeechRecognizer APIs on the main looper. */
+/** Verifies on-device availability checks run SpeechRecognizer APIs on the main looper and settle once. */
 @RunWith(RobolectricTestRunner.class)
 @Config(
     sdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE,

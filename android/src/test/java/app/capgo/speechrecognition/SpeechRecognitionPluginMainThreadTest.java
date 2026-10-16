@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.speech.RecognitionSupport;
 import android.speech.RecognitionSupportCallback;
 import android.speech.SpeechRecognizer;
 import androidx.appcompat.app.AppCompatActivity;
@@ -21,6 +22,8 @@ import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -228,6 +231,63 @@ public class SpeechRecognitionPluginMainThreadTest {
         assertEquals("No recognizer instance to destroy when create throws", 0, ShadowSpeechRecognizerForThreadCheck.destroyCount.get());
     }
 
+    @Test
+    public void isOnDeviceRecognitionAvailable_resolvesTrueWhenLanguageInstalled() throws Exception {
+        ShadowSpeechRecognizerForThreadCheck.reportInstalledLanguage.set(true);
+
+        AppCompatActivity activity = mock(AppCompatActivity.class);
+        Context appContext = RuntimeEnvironment.getApplication();
+        when(activity.getApplicationContext()).thenReturn(appContext);
+        when(activity.getPackageName()).thenReturn("app.capgo.speechrecognition.test");
+        doAnswer((invocation) -> {
+            Runnable runnable = invocation.getArgument(0);
+            runnable.run();
+            return null;
+        })
+            .when(activity)
+            .runOnUiThread(any());
+        Bridge bridge = mock(Bridge.class);
+        when(bridge.getActivity()).thenReturn(activity);
+        when(bridge.getContext()).thenReturn(appContext);
+        doAnswer((invocation) -> {
+            Runnable runnable = invocation.getArgument(0);
+            new Handler(Looper.getMainLooper()).post(runnable);
+            return null;
+        })
+            .when(bridge)
+            .executeOnMainThread(any());
+
+        SpeechRecognitionPlugin plugin = new SpeechRecognitionPlugin();
+        setBridge(plugin, bridge);
+
+        PluginCall call = mock(PluginCall.class);
+        when(call.getString(eq("language"), any())).thenReturn("de-DE");
+
+        AtomicInteger resolveCount = new AtomicInteger(0);
+        AtomicBoolean resolvedAvailable = new AtomicBoolean(false);
+        doAnswer((invocation) -> {
+            resolveCount.incrementAndGet();
+            JSObject result = invocation.getArgument(0);
+            resolvedAvailable.set(result.getBoolean("available"));
+            return null;
+        })
+            .when(call)
+            .resolve(any(JSObject.class));
+
+        CountDownLatch invoked = new CountDownLatch(1);
+        pluginHandler.post(() -> {
+            plugin.isOnDeviceRecognitionAvailable(call);
+            invoked.countDown();
+        });
+        assertTrue(invoked.await(5, TimeUnit.SECONDS));
+
+        org.robolectric.shadows.ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+
+        assertEquals("Plugin call should resolve exactly once", 1, resolveCount.get());
+        assertEquals("Availability should be true when language is installed", true, resolvedAvailable.get());
+        assertEquals("Temporary support checker should be destroyed", 1, ShadowSpeechRecognizerForThreadCheck.destroyCount.get());
+    }
+
     private static void setBridge(SpeechRecognitionPlugin plugin, Bridge bridge) throws Exception {
         Field bridgeField = com.getcapacitor.Plugin.class.getDeclaredField("bridge");
         bridgeField.setAccessible(true);
@@ -240,12 +300,14 @@ public class SpeechRecognitionPluginMainThreadTest {
         static final AtomicBoolean createdOnMainThread = new AtomicBoolean(false);
         static final AtomicBoolean throwOnCheckRecognitionSupport = new AtomicBoolean(false);
         static final AtomicBoolean throwOnCreate = new AtomicBoolean(false);
+        static final AtomicBoolean reportInstalledLanguage = new AtomicBoolean(false);
         static final AtomicInteger destroyCount = new AtomicInteger(0);
 
         static void reset() {
             createdOnMainThread.set(false);
             throwOnCheckRecognitionSupport.set(false);
             throwOnCreate.set(false);
+            reportInstalledLanguage.set(false);
             destroyCount.set(0);
         }
 
@@ -268,6 +330,14 @@ public class SpeechRecognitionPluginMainThreadTest {
                 Executor executor = invocation.getArgument(1);
                 RecognitionSupportCallback callback = invocation.getArgument(2);
                 executor.execute(() -> {
+                    if (reportInstalledLanguage.get()) {
+                        RecognitionSupport support = mock(RecognitionSupport.class);
+                        when(support.getInstalledOnDeviceLanguages()).thenReturn(Arrays.asList("de-DE"));
+                        when(support.getSupportedOnDeviceLanguages()).thenReturn(Collections.emptyList());
+                        when(support.getPendingOnDeviceLanguages()).thenReturn(Collections.emptyList());
+                        callback.onSupportResult(support);
+                        return;
+                    }
                     callback.onError(SpeechRecognizer.ERROR_CLIENT);
                     callback.onError(SpeechRecognizer.ERROR_CLIENT);
                 });

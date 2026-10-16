@@ -422,12 +422,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             .post(() -> {
                 try {
                     lock.lock();
-                    if (
-                        currentSessionId == sessionId &&
-                        state == ListeningState.STOPPING &&
-                        "forceStop".equals(pendingStopReason) &&
-                        speechRecognizer != null
-                    ) {
+                    // Do not gate on pendingStopReason: setPTTState can clear it while STOPPING.
+                    if (currentSessionId == sessionId && state == ListeningState.STOPPING && speechRecognizer != null) {
                         try {
                             speechRecognizer.stopListening();
                         } catch (Exception ignored) {}

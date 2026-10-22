@@ -141,7 +141,7 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
     func stop() async {
-        await teardown(notifyStopped: true)
+        await teardown(notifyStopped: true, callerIsResultTask: false)
     }
 
     private func startResultTask(for transcriber: SpeechTranscriber) {
@@ -158,11 +158,11 @@ final class SpeechAnalyzerRecognitionSession {
                     onResult?(Array([transcript].prefix(maxResults)), result.isFinal)
                 }
 
-                await teardown(notifyStopped: true)
+                await teardown(notifyStopped: true, callerIsResultTask: true)
             } catch is CancellationError {
-                await teardown(notifyStopped: false)
+                await teardown(notifyStopped: false, callerIsResultTask: true)
             } catch {
-                await teardown(notifyStopped: false)
+                await teardown(notifyStopped: false, callerIsResultTask: true)
                 onError?(error)
             }
         }
@@ -228,14 +228,12 @@ final class SpeechAnalyzerRecognitionSession {
         analyzerInputContinuation.yield(analyzerInput)
     }
 
-    private func teardown(notifyStopped: Bool) async {
+    private func teardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
         if isTearingDown {
             return
         }
 
         isTearingDown = true
-
-        let isResultTaskCaller = resultTask != nil && resultTask == Task.current
 
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -257,7 +255,7 @@ final class SpeechAnalyzerRecognitionSession {
 
         if let drainingTask = resultTask {
             resultTask = nil
-            if !isResultTaskCaller {
+            if !callerIsResultTask {
                 _ = await drainingTask.value
             }
         } else {

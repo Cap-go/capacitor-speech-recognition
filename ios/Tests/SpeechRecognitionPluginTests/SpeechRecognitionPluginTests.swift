@@ -135,6 +135,28 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         XCTAssertTrue(beginRecognitionUsesModern)
     }
 
+    func testLegacyRecognitionStopStrategy_waitsWhenTaskIsRunning() {
+        XCTAssertEqual(
+            LegacyRecognitionStopStrategy.resolve(hasRecognitionRequest: true, hasRecognitionTask: true),
+            .waitForFinalResult
+        )
+    }
+
+    func testLegacyRecognitionStopStrategy_immediateWhenNoTask() {
+        XCTAssertEqual(
+            LegacyRecognitionStopStrategy.resolve(hasRecognitionRequest: true, hasRecognitionTask: false),
+            .immediateCleanup
+        )
+        XCTAssertEqual(
+            LegacyRecognitionStopStrategy.resolve(hasRecognitionRequest: false, hasRecognitionTask: false),
+            .immediateCleanup
+        )
+    }
+
+    func testRecognitionStopTiming_legacyFallbackMatchesAndroidStopFallback() {
+        XCTAssertEqual(RecognitionStopTiming.legacyStopFallbackTimeout, 2.0)
+    }
+
     func testBeginRecognitionRouteAlignment_prefersLegacyWhenLegacyFlagSet() {
         let modernPathSupportedOnOS = true
         let preferLegacyRecognizer = true

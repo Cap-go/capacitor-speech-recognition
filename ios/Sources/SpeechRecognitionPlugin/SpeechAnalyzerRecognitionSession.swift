@@ -235,9 +235,7 @@ final class SpeechAnalyzerRecognitionSession {
 
         isTearingDown = true
 
-        let currentTask = resultTask
-        resultTask = nil
-        currentTask?.cancel()
+        let isResultTaskCaller = resultTask != nil && resultTask == Task.current
 
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -255,6 +253,15 @@ final class SpeechAnalyzerRecognitionSession {
             try await analyzer?.finalizeAndFinishThroughEndOfInput()
         } catch {
             // Best-effort shutdown. The plugin still needs native cleanup to succeed.
+        }
+
+        if let drainingTask = resultTask {
+            resultTask = nil
+            if !isResultTaskCaller {
+                _ = await drainingTask.value
+            }
+        } else {
+            resultTask = nil
         }
 
         analyzer = nil

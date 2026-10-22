@@ -450,6 +450,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                     if result.isFinal {
                         if self.prepareContinuousRestartIfNeeded(matches: matches, sessionId: sessionId) {
                             self.clearLegacyRecognitionResources()
+                            self.setMicrophoneListening(false)
                             self.scheduleContinuousRestart(sessionId: sessionId)
                             return
                         }
@@ -750,11 +751,6 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func deferLegacyStopCallResolution(_ call: CAPPluginCall) {
-        if !deferredLegacyStopCalls.isEmpty {
-            call.resolve()
-            return
-        }
-
         deferredLegacyStopCalls.append(call)
     }
 

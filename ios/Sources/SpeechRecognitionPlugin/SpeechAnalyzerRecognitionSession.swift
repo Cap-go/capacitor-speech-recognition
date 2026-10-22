@@ -207,13 +207,18 @@ final class SpeechAnalyzerRecognitionSession {
                     return
                 }
 
+                var processingError: Error?
                 await self.inFlightAudioBuffers.track {
                     do {
                         try await self.processAudioBuffer(sendableBuffer)
                     } catch {
-                        self.onError?(error)
-                        await self.teardown(notifyStopped: false, callerIsResultTask: false)
+                        processingError = error
                     }
+                }
+
+                if let processingError {
+                    self.onError?(processingError)
+                    await self.teardown(notifyStopped: false, callerIsResultTask: false)
                 }
             }
         }
@@ -236,7 +241,7 @@ final class SpeechAnalyzerRecognitionSession {
             analyzerFormat: analyzerFormat
         )
 
-        guard !isTearingDown, let continuation = self.analyzerInputContinuation else {
+        guard let continuation = self.analyzerInputContinuation else {
             return
         }
 

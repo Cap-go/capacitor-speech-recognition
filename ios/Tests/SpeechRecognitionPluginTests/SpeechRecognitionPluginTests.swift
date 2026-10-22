@@ -157,6 +157,11 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         XCTAssertEqual(RecognitionStopTiming.legacyStopFallbackTimeout, 2.0)
     }
 
+    func testLegacyStopFallbackScheduling_skipsWhenFallbackAlreadyScheduled() {
+        XCTAssertTrue(LegacyStopFallbackScheduling.shouldScheduleNewFallback(hasExistingFallback: false))
+        XCTAssertFalse(LegacyStopFallbackScheduling.shouldScheduleNewFallback(hasExistingFallback: true))
+    }
+
     func testBeginRecognitionRouteAlignment_prefersLegacyWhenLegacyFlagSet() {
         let modernPathSupportedOnOS = true
         let preferLegacyRecognizer = true

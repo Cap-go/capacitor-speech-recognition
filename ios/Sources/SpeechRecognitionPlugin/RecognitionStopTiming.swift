@@ -16,3 +16,9 @@ enum LegacyRecognitionStopStrategy: Equatable {
         return .immediateCleanup
     }
 }
+
+enum LegacyStopFallbackScheduling {
+    static func shouldScheduleNewFallback(hasExistingFallback: Bool) -> Bool {
+        !hasExistingFallback
+    }
+}

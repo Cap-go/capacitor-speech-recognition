@@ -69,6 +69,7 @@ final class SpeechAnalyzerRecognitionSession {
     private var analyzerInputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analyzerFormat: AVAudioFormat?
     private var resultTask: Task<Void, Never>?
+    private let inFlightAudioBuffers = InFlightAudioBufferCounter()
     private var hasInstalledTap = false
     private var isTearingDown = false
     private var isAudioSessionActive = false
@@ -201,12 +202,18 @@ final class SpeechAnalyzerRecognitionSession {
             }
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)
-            Task {
-                do {
-                    try await self.processAudioBuffer(sendableBuffer)
-                } catch {
-                    self.onError?(error)
-                    await self.teardown(notifyStopped: false, callerIsResultTask: false)
+            Task { @MainActor in
+                guard !self.isTearingDown else {
+                    return
+                }
+
+                await self.inFlightAudioBuffers.track {
+                    do {
+                        try await self.processAudioBuffer(sendableBuffer)
+                    } catch {
+                        self.onError?(error)
+                        await self.teardown(notifyStopped: false, callerIsResultTask: false)
+                    }
                 }
             }
         }
@@ -217,7 +224,10 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
     private func processAudioBuffer(_ buffer: SpeechAnalyzerSendablePCMBuffer) async throws {
-        guard let analyzerInputContinuation, let analyzerFormat else {
+        guard !isTearingDown, let analyzerInputContinuation, let analyzerFormat else {
+            if isTearingDown {
+                return
+            }
             throw SpeechAnalyzerRecognitionError.setupFailed("Analyzer input is not ready.")
         }
 
@@ -225,7 +235,12 @@ final class SpeechAnalyzerRecognitionSession {
             from: buffer,
             analyzerFormat: analyzerFormat
         )
-        analyzerInputContinuation.yield(analyzerInput)
+
+        guard !isTearingDown, let continuation = self.analyzerInputContinuation else {
+            return
+        }
+
+        continuation.yield(analyzerInput)
     }
 
     private func teardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
@@ -243,6 +258,8 @@ final class SpeechAnalyzerRecognitionSession {
             audioEngine.inputNode.removeTap(onBus: 0)
             hasInstalledTap = false
         }
+
+        await inFlightAudioBuffers.waitUntilIdle()
 
         analyzerInputContinuation?.finish()
         analyzerInputContinuation = nil
@@ -288,6 +305,37 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         isAudioSessionActive = false
+    }
+}
+
+@available(iOS 26.0, *)
+private actor InFlightAudioBufferCounter {
+    private var inFlightCount = 0
+    private var idleContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func track(_ operation: () async -> Void) async {
+        inFlightCount += 1
+        await operation()
+        inFlightCount -= 1
+        if inFlightCount == 0 {
+            let waiters = idleContinuations
+            idleContinuations = []
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+    }
+
+    func waitUntilIdle() async {
+        while inFlightCount > 0 {
+            await withCheckedContinuation { continuation in
+                if inFlightCount == 0 {
+                    continuation.resume()
+                } else {
+                    idleContinuations.append(continuation)
+                }
+            }
+        }
     }
 }
 

@@ -206,7 +206,7 @@ final class SpeechAnalyzerRecognitionSession {
                     try await self.processAudioBuffer(sendableBuffer)
                 } catch {
                     self.onError?(error)
-                    await self.teardown(notifyStopped: false)
+                    await self.teardown(notifyStopped: false, callerIsResultTask: false)
                 }
             }
         }

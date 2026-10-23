@@ -18,6 +18,42 @@ private final class AsyncTestFlag: @unchecked Sendable {
     }
 }
 
+private final class AsyncTestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func awaitRelease() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if released {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+
+    func release() {
+        lock.lock()
+        released = true
+        let pending = waiters
+        waiters = []
+        lock.unlock()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
+}
+
+private func yieldUntilIdleWaitScheduled() async {
+    for _ in 0 ..< 32 {
+        await Task.yield()
+    }
+}
+
 final class SpeechRecognitionPluginTests: XCTestCase {
     func testLegacyOnDeviceRequirement_notRequiredWhenFlagDisabled() {
         XCTAssertEqual(
@@ -189,7 +225,7 @@ final class SpeechRecognitionPluginTests: XCTestCase {
             idleReached.set()
         }
 
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await yieldUntilIdleWaitScheduled()
         XCTAssertFalse(idleReached.get())
         await counter.track {}
 
@@ -209,14 +245,15 @@ final class SpeechRecognitionPluginTests: XCTestCase {
             idleReached.set()
         }
 
+        let processingGate = AsyncTestGate()
         let processingStarted = Task {
             await counter.track {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                await processingGate.awaitRelease()
             }
             trackFinished.set()
         }
 
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await yieldUntilIdleWaitScheduled()
         XCTAssertFalse(idleReached.get())
         XCTAssertFalse(trackFinished.get())
 
@@ -225,9 +262,10 @@ final class SpeechRecognitionPluginTests: XCTestCase {
             idleEarlyReached.set()
         }
 
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await yieldUntilIdleWaitScheduled()
         XCTAssertFalse(idleEarlyReached.get())
 
+        processingGate.release()
         await processingStarted.value
         XCTAssertTrue(trackFinished.get())
 

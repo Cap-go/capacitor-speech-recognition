@@ -1,6 +1,23 @@
 import XCTest
 @testable import SpeechRecognitionPlugin
 
+private final class AsyncTestFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func set() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    func get() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 final class SpeechRecognitionPluginTests: XCTestCase {
     func testLegacyOnDeviceRequirement_notRequiredWhenFlagDisabled() {
         XCTAssertEqual(
@@ -165,39 +182,59 @@ final class SpeechRecognitionPluginTests: XCTestCase {
     func testInFlightAudioBufferCounter_waitUntilIdleBlocksForPendingTapWork() async {
         let counter = InFlightAudioBufferCounter()
         counter.registerPendingWork()
+        let idleReached = AsyncTestFlag()
 
         let idleTask = Task {
             await counter.waitUntilIdle()
+            idleReached.set()
         }
 
         try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(idleReached.get())
         await counter.track {}
 
         await idleTask.value
+        XCTAssertTrue(idleReached.get())
     }
 
     func testInFlightAudioBufferCounter_waitUntilIdleBlocksForInFlightWork() async {
         let counter = InFlightAudioBufferCounter()
         counter.registerPendingWork()
+        let idleReached = AsyncTestFlag()
+        let idleEarlyReached = AsyncTestFlag()
+        let trackFinished = AsyncTestFlag()
 
         let idleTask = Task {
             await counter.waitUntilIdle()
+            idleReached.set()
         }
 
         let processingStarted = Task {
             await counter.track {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
+            trackFinished.set()
         }
 
         try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertFalse(idleReached.get())
+        XCTAssertFalse(trackFinished.get())
+
         let idleEarly = Task {
             await counter.waitUntilIdle()
+            idleEarlyReached.set()
         }
 
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertFalse(idleEarlyReached.get())
+
         await processingStarted.value
+        XCTAssertTrue(trackFinished.get())
+
         await idleTask.value
         await idleEarly.value
+        XCTAssertTrue(idleReached.get())
+        XCTAssertTrue(idleEarlyReached.get())
     }
 
     func testBeginRecognitionRouteAlignment_prefersLegacyWhenLegacyFlagSet() {

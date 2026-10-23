@@ -263,14 +263,20 @@ final class SpeechAnalyzerRecognitionSession {
         analyzerInputContinuation?.finish()
         analyzerInputContinuation = nil
 
+        var finalizedCleanly = true
         do {
             try await analyzer?.finalizeAndFinishThroughEndOfInput()
         } catch {
             // Best-effort shutdown. The plugin still needs native cleanup to succeed.
+            finalizedCleanly = false
+            await analyzer?.cancelAndFinishNow()
         }
 
         if let drainingTask = resultTask {
             resultTask = nil
+            if !finalizedCleanly {
+                drainingTask.cancel()
+            }
             if !callerIsResultTask {
                 _ = await drainingTask.value
             }

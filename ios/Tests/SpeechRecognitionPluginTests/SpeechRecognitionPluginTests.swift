@@ -162,6 +162,44 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         XCTAssertFalse(LegacyStopFallbackScheduling.shouldScheduleNewFallback(hasExistingFallback: true))
     }
 
+    func testInFlightAudioBufferCounter_waitUntilIdleBlocksForPendingTapWork() async {
+        let counter = InFlightAudioBufferCounter()
+        counter.registerPendingWork()
+
+        let idleTask = Task {
+            await counter.waitUntilIdle()
+        }
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        await counter.track {}
+
+        await idleTask.value
+    }
+
+    func testInFlightAudioBufferCounter_waitUntilIdleBlocksForInFlightWork() async {
+        let counter = InFlightAudioBufferCounter()
+        counter.registerPendingWork()
+
+        let idleTask = Task {
+            await counter.waitUntilIdle()
+        }
+
+        let processingStarted = Task {
+            await counter.track {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let idleEarly = Task {
+            await counter.waitUntilIdle()
+        }
+
+        await processingStarted.value
+        await idleTask.value
+        await idleEarly.value
+    }
+
     func testBeginRecognitionRouteAlignment_prefersLegacyWhenLegacyFlagSet() {
         let modernPathSupportedOnOS = true
         let preferLegacyRecognizer = true

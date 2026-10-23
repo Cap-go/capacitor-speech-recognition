@@ -202,11 +202,8 @@ final class SpeechAnalyzerRecognitionSession {
             }
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)
+            self.inFlightAudioBuffers.registerPendingWork()
             Task { @MainActor in
-                guard !self.isTearingDown else {
-                    return
-                }
-
                 var processingError: Error?
                 await self.inFlightAudioBuffers.track {
                     do {
@@ -229,10 +226,7 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
     private func processAudioBuffer(_ buffer: SpeechAnalyzerSendablePCMBuffer) async throws {
-        guard !isTearingDown, let analyzerInputContinuation, let analyzerFormat else {
-            if isTearingDown {
-                return
-            }
+        guard let analyzerInputContinuation, let analyzerFormat else {
             throw SpeechAnalyzerRecognitionError.setupFailed("Analyzer input is not ready.")
         }
 
@@ -310,37 +304,6 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         isAudioSessionActive = false
-    }
-}
-
-@available(iOS 26.0, *)
-private actor InFlightAudioBufferCounter {
-    private var inFlightCount = 0
-    private var idleContinuations: [CheckedContinuation<Void, Never>] = []
-
-    func track(_ operation: () async -> Void) async {
-        inFlightCount += 1
-        await operation()
-        inFlightCount -= 1
-        if inFlightCount == 0 {
-            let waiters = idleContinuations
-            idleContinuations = []
-            for waiter in waiters {
-                waiter.resume()
-            }
-        }
-    }
-
-    func waitUntilIdle() async {
-        while inFlightCount > 0 {
-            await withCheckedContinuation { continuation in
-                if inFlightCount == 0 {
-                    continuation.resume()
-                } else {
-                    idleContinuations.append(continuation)
-                }
-            }
-        }
     }
 }
 

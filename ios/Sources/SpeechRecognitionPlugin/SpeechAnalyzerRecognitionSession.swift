@@ -148,7 +148,9 @@ final class SpeechAnalyzerRecognitionSession {
 
     private func requestTeardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
         if let sharedTeardownTask {
-            await sharedTeardownTask.value
+            if !callerIsResultTask {
+                await sharedTeardownTask.value
+            }
             return
         }
 

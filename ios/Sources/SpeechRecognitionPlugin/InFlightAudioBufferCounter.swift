@@ -54,16 +54,25 @@ internal final class InFlightAudioBufferCounter: Sendable {
         }
 
         func waitUntilIdle() async {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            while true {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    lock.lock()
+                    if pendingCount == 0 && inFlightCount == 0 {
+                        lock.unlock()
+                        continuation.resume()
+                    } else {
+                        idleContinuations.append(continuation)
+                        let probe = registrationProbe
+                        lock.unlock()
+                        probe?.notifyRegistered()
+                    }
+                }
+
                 lock.lock()
-                if pendingCount == 0 && inFlightCount == 0 {
-                    lock.unlock()
-                    continuation.resume()
-                } else {
-                    idleContinuations.append(continuation)
-                    let probe = registrationProbe
-                    lock.unlock()
-                    probe?.notifyRegistered()
+                let idle = pendingCount == 0 && inFlightCount == 0
+                lock.unlock()
+                if idle {
+                    return
                 }
             }
         }

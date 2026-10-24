@@ -51,22 +51,31 @@ private final class AsyncTestGate: @unchecked Sendable {
 private final class IdleWaiterRegistrationAwaiter: @unchecked Sendable {
     private let lock = NSLock()
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var pendingSignals = 0
 
     func waitForNext() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             lock.lock()
-            waiters.append(continuation)
-            lock.unlock()
+            if pendingSignals > 0 {
+                pendingSignals -= 1
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
         }
     }
 
     func signal() {
         lock.lock()
-        let pending = waiters
-        waiters = []
-        lock.unlock()
-        for waiter in pending {
+        if let waiter = waiters.first {
+            waiters.removeFirst()
+            lock.unlock()
             waiter.resume()
+        } else {
+            pendingSignals += 1
+            lock.unlock()
         }
     }
 }
@@ -250,12 +259,12 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         let registration = IdleWaiterRegistrationAwaiter()
         counter.idleWaiterRegistrationProbe.setHandler { registration.signal() }
 
+        let waitRegistration = Task { await registration.waitForNext() }
         let idleTask = Task {
             await counter.waitUntilIdle()
             idleReached.set()
         }
 
-        let waitRegistration = Task { await registration.waitForNext() }
         await waitRegistration.value
         XCTAssertFalse(idleReached.get())
         await counter.track {}
@@ -274,6 +283,7 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         let registration = IdleWaiterRegistrationAwaiter()
         counter.idleWaiterRegistrationProbe.setHandler { registration.signal() }
 
+        let waitFirstRegistration = Task { await registration.waitForNext() }
         let idleTask = Task {
             await counter.waitUntilIdle()
             idleReached.set()
@@ -287,17 +297,16 @@ final class SpeechRecognitionPluginTests: XCTestCase {
             trackFinished.set()
         }
 
-        let waitFirstRegistration = Task { await registration.waitForNext() }
         await waitFirstRegistration.value
         XCTAssertFalse(idleReached.get())
         XCTAssertFalse(trackFinished.get())
 
+        let waitSecondRegistration = Task { await registration.waitForNext() }
         let idleEarly = Task {
             await counter.waitUntilIdle()
             idleEarlyReached.set()
         }
 
-        let waitSecondRegistration = Task { await registration.waitForNext() }
         await waitSecondRegistration.value
         XCTAssertFalse(idleEarlyReached.get())
 

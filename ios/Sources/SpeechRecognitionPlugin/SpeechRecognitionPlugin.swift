@@ -703,6 +703,11 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        if LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(error, stopReason: pendingStopReason) {
+            finishSessionIfNeeded(sessionId: sessionId, reason: .userStop, errorCode: nil)
+            return
+        }
+
         let code = errorCode(for: error)
         emitErrorEvent(code: code, message: error.localizedDescription, sessionId: sessionId)
 

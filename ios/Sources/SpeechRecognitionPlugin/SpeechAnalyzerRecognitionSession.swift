@@ -72,6 +72,7 @@ final class SpeechAnalyzerRecognitionSession {
     private let inFlightAudioBuffers = InFlightAudioBufferCounter()
     private var hasInstalledTap = false
     private var isTearingDown = false
+    private var sharedTeardownTask: Task<Void, Never>?
     private var isAudioSessionActive = false
 
     var onListeningStarted: VoidHandler?
@@ -142,7 +143,25 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
     func stop() async {
-        await teardown(notifyStopped: true, callerIsResultTask: false)
+        await requestTeardown(notifyStopped: true, callerIsResultTask: false)
+    }
+
+    private func requestTeardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
+        if let sharedTeardownTask {
+            await sharedTeardownTask.value
+            return
+        }
+
+        guard audioEngine.isRunning || resultTask != nil || hasInstalledTap || isTearingDown else {
+            return
+        }
+
+        let task = Task { @MainActor in
+            await self.performTeardown(notifyStopped: notifyStopped, callerIsResultTask: callerIsResultTask)
+        }
+        sharedTeardownTask = task
+        await task.value
+        sharedTeardownTask = nil
     }
 
     private func startResultTask(for transcriber: SpeechTranscriber) {
@@ -159,11 +178,11 @@ final class SpeechAnalyzerRecognitionSession {
                     onResult?(Array([transcript].prefix(maxResults)), result.isFinal)
                 }
 
-                await teardown(notifyStopped: true, callerIsResultTask: true)
+                await requestTeardown(notifyStopped: true, callerIsResultTask: true)
             } catch is CancellationError {
-                await teardown(notifyStopped: false, callerIsResultTask: true)
+                await requestTeardown(notifyStopped: false, callerIsResultTask: true)
             } catch {
-                await teardown(notifyStopped: false, callerIsResultTask: true)
+                await requestTeardown(notifyStopped: false, callerIsResultTask: true)
                 onError?(error)
             }
         }
@@ -215,7 +234,7 @@ final class SpeechAnalyzerRecognitionSession {
 
                 if let processingError {
                     self.onError?(processingError)
-                    await self.teardown(notifyStopped: false, callerIsResultTask: false)
+                    await self.requestTeardown(notifyStopped: false, callerIsResultTask: false)
                 }
             }
         }
@@ -242,7 +261,7 @@ final class SpeechAnalyzerRecognitionSession {
         continuation.yield(analyzerInput)
     }
 
-    private func teardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
+    private func performTeardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
         if isTearingDown {
             return
         }

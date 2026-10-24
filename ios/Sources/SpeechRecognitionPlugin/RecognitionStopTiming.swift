@@ -22,3 +22,20 @@ enum LegacyStopFallbackScheduling {
         !hasExistingFallback
     }
 }
+
+enum LegacySpeechRecognitionBenignStopError {
+    /// Speech errors that commonly follow `endAudio()` on a silent capture after user stop.
+    static func isBenignAfterUserStop(_ error: Error, stopReason: ListeningReason?) -> Bool {
+        guard stopReason == .userStop else {
+            return false
+        }
+
+        let nsError = error as NSError
+        switch (nsError.domain, nsError.code) {
+        case ("kLSRErrorDomain", 301), ("kAFAssistantErrorDomain", 1110):
+            return true
+        default:
+            return false
+        }
+    }
+}

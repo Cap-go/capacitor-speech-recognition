@@ -48,9 +48,26 @@ private final class AsyncTestGate: @unchecked Sendable {
     }
 }
 
-private func yieldUntilIdleWaitScheduled() async {
-    for _ in 0 ..< 32 {
-        await Task.yield()
+private final class IdleWaiterRegistrationAwaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitForNext() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    func signal() {
+        lock.lock()
+        let pending = waiters
+        waiters = []
+        lock.unlock()
+        for waiter in pending {
+            waiter.resume()
+        }
     }
 }
 
@@ -215,17 +232,32 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         XCTAssertFalse(LegacyStopFallbackScheduling.shouldScheduleNewFallback(hasExistingFallback: true))
     }
 
+    func testLegacySpeechRecognitionBenignStopError_onlyForUserStop() {
+        let noSpeech = NSError(domain: "kAFAssistantErrorDomain", code: 1110)
+        let canceled = NSError(domain: "kLSRErrorDomain", code: 301)
+        let other = NSError(domain: "kAFAssistantErrorDomain", code: 1100)
+
+        XCTAssertTrue(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, stopReason: .userStop))
+        XCTAssertTrue(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(canceled, stopReason: .userStop))
+        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(other, stopReason: .userStop))
+        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, stopReason: .forceStop))
+        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, stopReason: nil))
+    }
+
     func testInFlightAudioBufferCounter_waitUntilIdleBlocksForPendingTapWork() async {
         let counter = InFlightAudioBufferCounter()
         counter.registerPendingWork()
         let idleReached = AsyncTestFlag()
+        let registration = IdleWaiterRegistrationAwaiter()
+        counter.idleWaiterRegistrationProbe.setHandler { registration.signal() }
 
         let idleTask = Task {
             await counter.waitUntilIdle()
             idleReached.set()
         }
 
-        await yieldUntilIdleWaitScheduled()
+        let waitRegistration = Task { await registration.waitForNext() }
+        await waitRegistration.value
         XCTAssertFalse(idleReached.get())
         await counter.track {}
 
@@ -240,6 +272,9 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         let idleEarlyReached = AsyncTestFlag()
         let trackFinished = AsyncTestFlag()
 
+        let registration = IdleWaiterRegistrationAwaiter()
+        counter.idleWaiterRegistrationProbe.setHandler { registration.signal() }
+
         let idleTask = Task {
             await counter.waitUntilIdle()
             idleReached.set()
@@ -253,7 +288,8 @@ final class SpeechRecognitionPluginTests: XCTestCase {
             trackFinished.set()
         }
 
-        await yieldUntilIdleWaitScheduled()
+        let waitFirstRegistration = Task { await registration.waitForNext() }
+        await waitFirstRegistration.value
         XCTAssertFalse(idleReached.get())
         XCTAssertFalse(trackFinished.get())
 
@@ -262,7 +298,8 @@ final class SpeechRecognitionPluginTests: XCTestCase {
             idleEarlyReached.set()
         }
 
-        await yieldUntilIdleWaitScheduled()
+        let waitSecondRegistration = Task { await registration.waitForNext() }
+        await waitSecondRegistration.value
         XCTAssertFalse(idleEarlyReached.get())
 
         processingGate.release()

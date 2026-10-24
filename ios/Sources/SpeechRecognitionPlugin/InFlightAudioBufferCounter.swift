@@ -1,14 +1,35 @@
 import Foundation
 
+/// Test hook: fired after an idle waiter is registered on `idleContinuations`.
+internal final class IdleWaiterRegistrationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable () -> Void)?
+
+    func setHandler(_ handler: (@Sendable () -> Void)?) {
+        lock.lock()
+        self.handler = handler
+        lock.unlock()
+    }
+
+    func notifyRegistered() {
+        lock.lock()
+        let handler = handler
+        lock.unlock()
+        handler?()
+    }
+}
+
 /// Tracks audio tap work from registration on the tap thread through MainActor processing.
 internal final class InFlightAudioBufferCounter: Sendable {
     private let state = IdleState()
+    internal let idleWaiterRegistrationProbe = IdleWaiterRegistrationProbe()
 
     private final class IdleState: @unchecked Sendable {
         private let lock = NSLock()
         private var pendingCount = 0
         private var inFlightCount = 0
         private var idleContinuations: [CheckedContinuation<Void, Never>] = []
+        weak var registrationProbe: IdleWaiterRegistrationProbe?
 
         func registerPending() {
             lock.lock()
@@ -40,7 +61,9 @@ internal final class InFlightAudioBufferCounter: Sendable {
                     continuation.resume()
                 } else {
                     idleContinuations.append(continuation)
+                    let probe = registrationProbe
                     lock.unlock()
+                    probe?.notifyRegistered()
                 }
             }
         }
@@ -55,6 +78,10 @@ internal final class InFlightAudioBufferCounter: Sendable {
                 waiter.resume()
             }
         }
+    }
+
+    init() {
+        state.registrationProbe = idleWaiterRegistrationProbe
     }
 
     nonisolated func registerPendingWork() {

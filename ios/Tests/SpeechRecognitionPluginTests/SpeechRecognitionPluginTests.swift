@@ -237,11 +237,10 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         let canceled = NSError(domain: "kLSRErrorDomain", code: 301)
         let other = NSError(domain: "kAFAssistantErrorDomain", code: 1100)
 
-        XCTAssertTrue(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, stopReason: .userStop))
-        XCTAssertTrue(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(canceled, stopReason: .userStop))
-        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(other, stopReason: .userStop))
-        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, stopReason: .forceStop))
-        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, stopReason: nil))
+        XCTAssertTrue(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, isUserStop: true))
+        XCTAssertTrue(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(canceled, isUserStop: true))
+        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(other, isUserStop: true))
+        XCTAssertFalse(LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(noSpeech, isUserStop: false))
     }
 
     func testInFlightAudioBufferCounter_waitUntilIdleBlocksForPendingTapWork() async {

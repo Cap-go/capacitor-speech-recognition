@@ -25,8 +25,8 @@ enum LegacyStopFallbackScheduling {
 
 enum LegacySpeechRecognitionBenignStopError {
     /// Speech errors that commonly follow `endAudio()` on a silent capture after user stop.
-    static func isBenignAfterUserStop(_ error: Error, stopReason: ListeningReason?) -> Bool {
-        guard stopReason == .userStop else {
+    static func isBenignAfterUserStop(_ error: Error, isUserStop: Bool) -> Bool {
+        guard isUserStop else {
             return false
         }
 

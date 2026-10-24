@@ -58,6 +58,9 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private var accumulatedTranscript = ""
     private var pendingContinuousRestartSessionId: Int?
     private var continuousRestartWorkItem: DispatchWorkItem?
+    private var stopFallbackWorkItem: DispatchWorkItem?
+    private var deferredLegacyStopCalls: [CAPPluginCall] = []
+    private var isMicrophoneListening = false
 
     private let maxDefaultResults = 5
     private let continuousRestartDelay: TimeInterval = 0.1
@@ -179,6 +182,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         pendingStopReason = .userStop
         emitStoppingIfNeeded(sessionId: sessionId, reason: .userStop, errorCode: nil)
         rejectPendingStartCallIfNeeded(message: "Recognition stopped before final results were produced.")
+        setMicrophoneListening(false)
 
         if #available(iOS 26.0, *), let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
             Task { @MainActor in
@@ -189,8 +193,19 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        clearLegacyRecognitionResources()
-        finishSessionIfNeeded(sessionId: sessionId, reason: .userStop, errorCode: nil, sessionAlreadyStopped: true)
+        switch LegacyRecognitionStopStrategy.resolve(
+            hasRecognitionRequest: recognitionRequest != nil,
+            hasRecognitionTask: recognitionTask != nil
+        ) {
+        case .waitForFinalResult:
+            endLegacyRecognitionCaptureForStop()
+            scheduleStopFallbackFinish(sessionId: sessionId, reason: .userStop)
+            deferLegacyStopCallResolution(call)
+            return
+        case .immediateCleanup:
+            clearLegacyRecognitionResources()
+            finishSessionIfNeeded(sessionId: sessionId, reason: .userStop, errorCode: nil, sessionAlreadyStopped: true)
+        }
         call.resolve()
     }
 
@@ -203,6 +218,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         pendingStopReason = .forceStop
         emitStoppingIfNeeded(sessionId: sessionId, reason: .forceStop, errorCode: nil)
         rejectPendingStartCallIfNeeded(message: "Recognition force stopped before final results were produced.")
+        setMicrophoneListening(false)
 
         if !latestPartialMatches.isEmpty || !accumulatedTranscriptText().isEmpty {
             emitPartialResultEvent(matches: latestPartialMatches, forced: true, includeAccumulatedText: true)
@@ -244,7 +260,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func isListening(_ call: CAPPluginCall) {
-        call.resolve(["listening": isRecognitionActive])
+        call.resolve(["listening": isMicrophoneListening])
     }
 
     @objc func getSupportedLanguages(_ call: CAPPluginCall) {
@@ -402,6 +418,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
         do {
             try audioEngine.start()
+            setMicrophoneListening(true)
             emitListeningState(state: "started", sessionId: sessionId, reason: restarting ? .results : .userStart, status: "started")
         } catch {
             call?.reject("Unable to start audio engine: \(error.localizedDescription)")
@@ -433,6 +450,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                     if result.isFinal {
                         if self.prepareContinuousRestartIfNeeded(matches: matches, sessionId: sessionId) {
                             self.clearLegacyRecognitionResources()
+                            self.setMicrophoneListening(false)
                             self.scheduleContinuousRestart(sessionId: sessionId)
                             return
                         }
@@ -494,6 +512,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
+            self.setMicrophoneListening(true)
             self.emitListeningState(state: "started", sessionId: sessionId, reason: restarting ? .results : .userStart, status: "started")
         }
 
@@ -579,7 +598,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         try session.setActive(true, options: .notifyOthersOnDeactivation)
     }
 
-    private func clearLegacyRecognitionResources() {
+    private func endLegacyRecognitionCaptureForStop() {
         if audioEngine.isRunning {
             audioEngine.stop()
         }
@@ -590,10 +609,38 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         recognitionRequest?.endAudio()
+    }
+
+    private func clearLegacyRecognitionResources() {
+        endLegacyRecognitionCaptureForStop()
         recognitionRequest = nil
         recognitionTask?.cancel()
         recognitionTask = nil
         speechRecognizer = nil
+    }
+
+    private func scheduleStopFallbackFinish(sessionId: Int, reason: ListeningReason) {
+        guard LegacyStopFallbackScheduling.shouldScheduleNewFallback(hasExistingFallback: stopFallbackWorkItem != nil) else {
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+            self.finishSessionIfNeeded(sessionId: sessionId, reason: reason, errorCode: nil)
+        }
+
+        stopFallbackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + RecognitionStopTiming.legacyStopFallbackTimeout,
+            execute: workItem
+        )
+    }
+
+    private func cancelPendingStopFallback() {
+        stopFallbackWorkItem?.cancel()
+        stopFallbackWorkItem = nil
     }
 
     private func finishSessionIfNeeded(
@@ -613,6 +660,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         pendingStopReason = nil
         emittedStoppingSessionId = nil
         cancelPendingContinuousRestart()
+        cancelPendingStopFallback()
 
         if #available(iOS 26.0, *),
            let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession,
@@ -655,6 +703,11 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        if LegacySpeechRecognitionBenignStopError.isBenignAfterUserStop(error, isUserStop: pendingStopReason == .userStop) {
+            finishSessionIfNeeded(sessionId: sessionId, reason: .userStop, errorCode: nil)
+            return
+        }
+
         let code = errorCode(for: error)
         emitErrorEvent(code: code, message: error.localizedDescription, sessionId: sessionId)
 
@@ -692,8 +745,26 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private func finalizeFinishedSession(sessionId: Int, reason: ListeningReason, errorCode: String?) {
         clearLegacyRecognitionResources()
         resetContinuousPTTState()
+        setMicrophoneListening(false)
+        resolveDeferredLegacyStopCalls()
         notifyListeners("readyForNextSession", data: ["sessionId": sessionId])
         emitListeningState(state: "stopped", sessionId: sessionId, reason: reason, errorCode: errorCode, status: "stopped")
+    }
+
+    private func setMicrophoneListening(_ listening: Bool) {
+        isMicrophoneListening = listening
+    }
+
+    private func deferLegacyStopCallResolution(_ call: CAPPluginCall) {
+        deferredLegacyStopCalls.append(call)
+    }
+
+    private func resolveDeferredLegacyStopCalls() {
+        let calls = deferredLegacyStopCalls
+        deferredLegacyStopCalls = []
+        for pendingCall in calls {
+            pendingCall.resolve()
+        }
     }
 
     private func prepareContinuousRestartIfNeeded(matches: [String], sessionId: Int) -> Bool {

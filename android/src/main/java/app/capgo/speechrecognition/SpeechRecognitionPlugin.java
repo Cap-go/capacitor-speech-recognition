@@ -46,7 +46,6 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
     private static final String TAG = "SpeechRecognition";
     private static final String PLUGIN_VERSION = "8.1.11";
     private static final int FORCE_STOP_TIMEOUT_MS = 1500;
-    private static final int STOP_FALLBACK_TIMEOUT_MS = 500;
     private static final int CONTINUOUS_RESTART_DELAY_MS = 100;
     /** Target audioLevel emit rate (~15 Hz), matching the public docs. */
     private static final long AUDIO_LEVEL_EMIT_INTERVAL_MS = 67;
@@ -334,7 +333,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                         } catch (Exception ignored) {}
                     }
                     listening(false);
-                    scheduleFinishFallbackLocked(currentSessionId, "userStop", null, STOP_FALLBACK_TIMEOUT_MS);
+                    scheduleFinishFallbackLocked(currentSessionId, "userStop", null, RecognitionStopTiming.STOP_FALLBACK_TIMEOUT_MS);
                 } finally {
                     lock.unlock();
                 }

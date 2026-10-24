@@ -69,8 +69,10 @@ final class SpeechAnalyzerRecognitionSession {
     private var analyzerInputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analyzerFormat: AVAudioFormat?
     private var resultTask: Task<Void, Never>?
+    private let inFlightAudioBuffers = InFlightAudioBufferCounter()
     private var hasInstalledTap = false
     private var isTearingDown = false
+    private var sharedTeardownTask: Task<Void, Never>?
     private var isAudioSessionActive = false
 
     var onListeningStarted: VoidHandler?
@@ -141,7 +143,27 @@ final class SpeechAnalyzerRecognitionSession {
     }
 
     func stop() async {
-        await teardown(notifyStopped: true)
+        await requestTeardown(notifyStopped: true, callerIsResultTask: false)
+    }
+
+    private func requestTeardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
+        if let sharedTeardownTask {
+            if !callerIsResultTask {
+                await sharedTeardownTask.value
+            }
+            return
+        }
+
+        guard audioEngine.isRunning || resultTask != nil || hasInstalledTap || isTearingDown else {
+            return
+        }
+
+        let task = Task { @MainActor in
+            await self.performTeardown(notifyStopped: notifyStopped, callerIsResultTask: callerIsResultTask)
+        }
+        sharedTeardownTask = task
+        await task.value
+        sharedTeardownTask = nil
     }
 
     private func startResultTask(for transcriber: SpeechTranscriber) {
@@ -158,11 +180,11 @@ final class SpeechAnalyzerRecognitionSession {
                     onResult?(Array([transcript].prefix(maxResults)), result.isFinal)
                 }
 
-                await teardown(notifyStopped: true)
+                await requestTeardown(notifyStopped: true, callerIsResultTask: true)
             } catch is CancellationError {
-                await teardown(notifyStopped: false)
+                await requestTeardown(notifyStopped: false, callerIsResultTask: true)
             } catch {
-                await teardown(notifyStopped: false)
+                await requestTeardown(notifyStopped: false, callerIsResultTask: true)
                 onError?(error)
             }
         }
@@ -201,12 +223,20 @@ final class SpeechAnalyzerRecognitionSession {
             }
 
             let sendableBuffer = SpeechAnalyzerSendablePCMBuffer(buffer: bufferCopy)
-            Task {
-                do {
-                    try await self.processAudioBuffer(sendableBuffer)
-                } catch {
-                    self.onError?(error)
-                    await self.teardown(notifyStopped: false)
+            self.inFlightAudioBuffers.registerPendingWork()
+            Task { @MainActor in
+                var processingError: Error?
+                await self.inFlightAudioBuffers.track {
+                    do {
+                        try await self.processAudioBuffer(sendableBuffer)
+                    } catch {
+                        processingError = error
+                    }
+                }
+
+                if let processingError {
+                    self.onError?(processingError)
+                    await self.requestTeardown(notifyStopped: false, callerIsResultTask: false)
                 }
             }
         }
@@ -225,19 +255,20 @@ final class SpeechAnalyzerRecognitionSession {
             from: buffer,
             analyzerFormat: analyzerFormat
         )
-        analyzerInputContinuation.yield(analyzerInput)
+
+        guard let continuation = self.analyzerInputContinuation else {
+            return
+        }
+
+        continuation.yield(analyzerInput)
     }
 
-    private func teardown(notifyStopped: Bool) async {
+    private func performTeardown(notifyStopped: Bool, callerIsResultTask: Bool) async {
         if isTearingDown {
             return
         }
 
         isTearingDown = true
-
-        let currentTask = resultTask
-        resultTask = nil
-        currentTask?.cancel()
 
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -248,13 +279,30 @@ final class SpeechAnalyzerRecognitionSession {
             hasInstalledTap = false
         }
 
+        await inFlightAudioBuffers.waitUntilIdle()
+
         analyzerInputContinuation?.finish()
         analyzerInputContinuation = nil
 
+        var finalizedCleanly = true
         do {
             try await analyzer?.finalizeAndFinishThroughEndOfInput()
         } catch {
             // Best-effort shutdown. The plugin still needs native cleanup to succeed.
+            finalizedCleanly = false
+            await analyzer?.cancelAndFinishNow()
+        }
+
+        if let drainingTask = resultTask {
+            resultTask = nil
+            if !finalizedCleanly {
+                drainingTask.cancel()
+            }
+            if !callerIsResultTask {
+                _ = await drainingTask.value
+            }
+        } else {
+            resultTask = nil
         }
 
         analyzer = nil

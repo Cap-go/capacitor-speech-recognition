@@ -101,6 +101,40 @@ public class GetSupportedLanguagesTest {
     }
 
     @Test
+    public void getSupportedLanguages_concurrentCallsSettleIndependently() throws Exception {
+        PluginCall firstCall = mock(PluginCall.class);
+        PluginCall secondCall = mock(PluginCall.class);
+
+        AtomicInteger firstRejectCount = new AtomicInteger(0);
+        AtomicInteger secondResolveCount = new AtomicInteger(0);
+
+        doAnswer((invocation) -> {
+            firstRejectCount.incrementAndGet();
+            return null;
+        })
+            .when(firstCall)
+            .reject(eq("Could not get list of languages"));
+
+        doAnswer((invocation) -> {
+            secondResolveCount.incrementAndGet();
+            return null;
+        })
+            .when(secondCall)
+            .resolve(any(JSObject.class));
+
+        plugin.getSupportedLanguages(firstCall);
+        plugin.getSupportedLanguages(secondCall);
+
+        deliverLanguageBroadcast(firstBroadcastReceiver.get(), null);
+        deliverLanguageBroadcast(secondBroadcastReceiver.get(), Arrays.asList("en-US", "fr-FR"));
+
+        assertEquals(1, firstRejectCount.get());
+        assertEquals(1, secondResolveCount.get());
+        verify(firstCall, times(0)).resolve(any(JSObject.class));
+        verify(secondCall, times(0)).reject(any(String.class));
+    }
+
+    @Test
     public void getSupportedLanguages_secondCallSettlesAfterFirstReject() throws Exception {
         PluginCall firstCall = mock(PluginCall.class);
         PluginCall secondCall = mock(PluginCall.class);

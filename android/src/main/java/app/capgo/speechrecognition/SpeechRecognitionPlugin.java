@@ -57,7 +57,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         STOPPING
     }
 
-    private Receiver languageReceiver;
+    private volatile List<String> cachedSupportedLanguages;
     private SpeechRecognizer speechRecognizer;
     private boolean speechRecognizerUsesOnDevice = false;
     private final ReentrantLock lock = new ReentrantLock();
@@ -475,22 +475,25 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
     @PluginMethod
     public void getSupportedLanguages(PluginCall call) {
-        if (languageReceiver == null) {
-            languageReceiver = new Receiver(call);
-        }
-
-        List<String> supportedLanguages = languageReceiver.getSupportedLanguages();
-        if (supportedLanguages != null) {
-            JSONArray languages = new JSONArray(supportedLanguages);
+        if (cachedSupportedLanguages != null) {
+            JSONArray languages = new JSONArray(cachedSupportedLanguages);
             call.resolve(new JSObject().put("languages", languages));
             return;
         }
+
+        Activity activity = bridge.getActivity();
+        if (activity == null) {
+            call.reject(LANGUAGE_ERROR);
+            return;
+        }
+
+        Receiver languageReceiver = new Receiver(call, (list) -> cachedSupportedLanguages = list);
 
         Intent detailsIntent = new Intent(RecognizerIntent.ACTION_GET_LANGUAGE_DETAILS);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             detailsIntent.setPackage("com.google.android.googlequicksearchbox");
         }
-        bridge.getActivity().sendOrderedBroadcast(detailsIntent, null, languageReceiver, null, Activity.RESULT_OK, null, null);
+        activity.sendOrderedBroadcast(detailsIntent, null, languageReceiver, null, Activity.RESULT_OK, null, null);
     }
 
     @PluginMethod

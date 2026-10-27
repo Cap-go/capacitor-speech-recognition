@@ -101,7 +101,7 @@ public class GetSupportedLanguagesTest {
     }
 
     @Test
-    public void getSupportedLanguages_secondCallSettlesAfterFirstReject() {
+    public void getSupportedLanguages_secondCallSettlesAfterFirstReject() throws Exception {
         PluginCall firstCall = mock(PluginCall.class);
         PluginCall secondCall = mock(PluginCall.class);
 

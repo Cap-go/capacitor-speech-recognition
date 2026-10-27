@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.json.JSONArray;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -121,15 +122,33 @@ public class GetSupportedLanguagesTest {
             .resolve(any(JSObject.class));
 
         plugin.getSupportedLanguages(firstCall);
-        plugin.getSupportedLanguages(secondCall);
-
         deliverLanguageBroadcast(firstBroadcastReceiver.get(), null);
+
+        plugin.getSupportedLanguages(secondCall);
         deliverLanguageBroadcast(secondBroadcastReceiver.get(), Arrays.asList("en-US", "fr-FR"));
 
         assertEquals(1, firstRejectCount.get());
         assertEquals(1, secondResolveCount.get());
         verify(firstCall, times(0)).resolve(any(JSObject.class));
         verify(secondCall, times(0)).reject(any(String.class));
+
+        PluginCall thirdCall = mock(PluginCall.class);
+        AtomicReference<JSObject> thirdResult = new AtomicReference<>();
+        doAnswer((invocation) -> {
+            thirdResult.set(invocation.getArgument(0));
+            return null;
+        })
+            .when(thirdCall)
+            .resolve(any(JSObject.class));
+
+        plugin.getSupportedLanguages(thirdCall);
+
+        assertEquals(2, broadcastInvocation);
+        assertNotNull(thirdResult.get());
+        JSONArray languages = thirdResult.get().getJSONArray("languages");
+        assertEquals(2, languages.length());
+        assertEquals("en-US", languages.getString(0));
+        assertEquals("fr-FR", languages.getString(1));
     }
 
     @Test

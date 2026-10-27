@@ -57,7 +57,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         STOPPING
     }
 
-    private List<String> cachedSupportedLanguages;
+    private volatile List<String> cachedSupportedLanguages;
     private SpeechRecognizer speechRecognizer;
     private boolean speechRecognizerUsesOnDevice = false;
     private final ReentrantLock lock = new ReentrantLock();

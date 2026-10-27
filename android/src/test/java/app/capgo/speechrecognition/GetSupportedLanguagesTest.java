@@ -187,6 +187,41 @@ public class GetSupportedLanguagesTest {
     }
 
     @Test
+    public void getSupportedLanguages_emptyListIsCachedAndSettlesIndependently() throws Exception {
+        PluginCall firstCall = mock(PluginCall.class);
+        PluginCall secondCall = mock(PluginCall.class);
+
+        AtomicReference<JSObject> firstResult = new AtomicReference<>();
+        AtomicReference<JSObject> secondResult = new AtomicReference<>();
+
+        doAnswer((invocation) -> {
+            firstResult.set(invocation.getArgument(0));
+            return null;
+        })
+            .when(firstCall)
+            .resolve(any(JSObject.class));
+
+        doAnswer((invocation) -> {
+            secondResult.set(invocation.getArgument(0));
+            return null;
+        })
+            .when(secondCall)
+            .resolve(any(JSObject.class));
+
+        plugin.getSupportedLanguages(firstCall);
+        deliverLanguageBroadcast(firstBroadcastReceiver.get(), new ArrayList<>());
+
+        assertNotNull(firstResult.get());
+        assertEquals(0, firstResult.get().getJSONArray("languages").length());
+
+        plugin.getSupportedLanguages(secondCall);
+
+        assertEquals(1, broadcastInvocation);
+        assertNotNull(secondResult.get());
+        assertEquals(0, secondResult.get().getJSONArray("languages").length());
+    }
+
+    @Test
     public void getSupportedLanguages_rejectsWhenActivityMissing() {
         when(bridge.getActivity()).thenReturn(null);
         PluginCall call = mock(PluginCall.class);

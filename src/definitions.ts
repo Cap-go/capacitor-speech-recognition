@@ -82,6 +82,25 @@ export interface SpeechRecognitionStartOptions {
    */
   useOnDeviceRecognition?: boolean;
   /**
+   * iOS 26+ only: choose which Apple transcriber the `SpeechAnalyzer` path uses.
+   *
+   * - `'speech'` uses `SpeechTranscriber` (default).
+   * - `'dictation'` uses `DictationTranscriber` with the `progressiveShortDictation` preset,
+   *   the model behind keyboard dictation. For apps that dictate into a text field it can give
+   *   faster in-progress results and better punctuation and accuracy.
+   *
+   * Only applies when the `SpeechAnalyzer` path is in use (see `useOnDeviceRecognition`).
+   * Ignored on Android, on web, on iOS versions below 26 and on the legacy `SFSpeechRecognizer` path.
+   * Locale support is checked against the chosen transcriber when recognition starts;
+   * `isOnDeviceRecognitionAvailable` and `getSupportedLanguages` always report `SpeechTranscriber` locales.
+   *
+   * Platform SDK docs:
+   * iOS: [DictationTranscriber](https://developer.apple.com/documentation/speech/dictationtranscriber)
+   *
+   * Defaults to `'speech'`.
+   */
+  iosTranscriber?: 'speech' | 'dictation';
+  /**
    * iOS only: skip the modern `SpeechAnalyzer` path even when it is available,
    * so that `useOnDeviceRecognition` applies to `SFSpeechRecognizer`
    * (`requiresOnDeviceRecognition`) instead.

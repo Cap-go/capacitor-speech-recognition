@@ -55,7 +55,12 @@ private enum SpeechAnalyzerTranscriber {
                 attributeOptions: []
             ))
         case .dictation:
-            self = .dictation(DictationTranscriber(locale: locale, preset: .progressiveShortDictation))
+            // Without partial results, drop volatile reporting so every word arrives in a final result.
+            var preset = DictationTranscriber.Preset.progressiveShortDictation
+            if !includePartialResults {
+                preset.reportingOptions.remove(.volatileResults)
+            }
+            self = .dictation(DictationTranscriber(locale: locale, preset: preset))
         }
     }
 
@@ -272,11 +277,6 @@ final class SpeechAnalyzerRecognitionSession {
                 for try await result in transcriber.results {
                     let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !transcript.isEmpty else {
-                        continue
-                    }
-
-                    // The dictation preset always reports volatile results; honour partialResults: false.
-                    guard result.isFinal || includePartialResults else {
                         continue
                     }
 

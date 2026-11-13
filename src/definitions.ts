@@ -59,7 +59,8 @@ export interface SpeechRecognitionStartOptions {
   /**
    * Opt in to the platform's newer on-device recognition path when available.
    *
-   * On iOS 26+, this uses Apple's `SpeechAnalyzer` / `SpeechTranscriber` pipeline.
+   * On iOS 26+, this uses Apple's `SpeechAnalyzer` pipeline with `SpeechTranscriber`,
+   * or with `DictationTranscriber` when `iosTranscriber` is `'dictation'`.
    * On recent Android versions, this uses the on-device `SpeechRecognizer` path.
    *
    * It is intentionally opt-in so existing apps keep the legacy flow unless they choose
@@ -75,7 +76,8 @@ export interface SpeechRecognitionStartOptions {
    * Platform SDK docs:
    * iOS: [Speech](https://developer.apple.com/documentation/speech),
    * [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer),
-   * [SpeechTranscriber](https://developer.apple.com/documentation/speech/speechtranscriber)
+   * [SpeechTranscriber](https://developer.apple.com/documentation/speech/speechtranscriber),
+   * [DictationTranscriber](https://developer.apple.com/documentation/speech/dictationtranscriber)
    * Android: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer)
    *
    * Defaults to `false`.
@@ -91,8 +93,9 @@ export interface SpeechRecognitionStartOptions {
    *
    * Only applies when the `SpeechAnalyzer` path is in use (see `useOnDeviceRecognition`).
    * Ignored on Android, on web, on iOS versions below 26 and on the legacy `SFSpeechRecognizer` path.
-   * Locale support is checked against the chosen transcriber when recognition starts;
-   * `isOnDeviceRecognitionAvailable` and `getSupportedLanguages` always report `SpeechTranscriber` locales.
+   * Locale support is checked against the chosen transcriber when recognition starts.
+   * Neither locale API takes this option: on the iOS 26+ path `isOnDeviceRecognitionAvailable`
+   * checks `SpeechTranscriber` locales, and `getSupportedLanguages` lists `SFSpeechRecognizer` locales.
    *
    * Platform SDK docs:
    * iOS: [DictationTranscriber](https://developer.apple.com/documentation/speech/dictationtranscriber)

@@ -69,33 +69,29 @@ private enum SpeechAnalyzerTranscriber {
     var results: AsyncThrowingStream<(text: String, isFinal: Bool), Error> {
         switch self {
         case .speech(let transcriber):
-            return AsyncThrowingStream { continuation in
-                let task = Task {
-                    do {
-                        for try await result in transcriber.results {
-                            continuation.yield((String(result.text.characters), result.isFinal))
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-            }
+            return Self.stream(transcriber.results) { (String($0.text.characters), $0.isFinal) }
         case .dictation(let transcriber):
-            return AsyncThrowingStream { continuation in
-                let task = Task {
-                    do {
-                        for try await result in transcriber.results {
-                            continuation.yield((String(result.text.characters), result.isFinal))
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
+            return Self.stream(transcriber.results) { (String($0.text.characters), $0.isFinal) }
+        }
+    }
+
+    /// One adapter for both result types, so cancellation and error forwarding stay identical.
+    private static func stream<Results: AsyncSequence & Sendable>(
+        _ results: Results,
+        _ transform: @escaping @Sendable (Results.Element) -> (text: String, isFinal: Bool)
+    ) -> AsyncThrowingStream<(text: String, isFinal: Bool), Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await result in results {
+                        continuation.yield(transform(result))
                     }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
                 }
-                continuation.onTermination = { _ in task.cancel() }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }

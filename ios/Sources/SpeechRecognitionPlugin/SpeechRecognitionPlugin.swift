@@ -124,7 +124,8 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             contextualStrings: contextualStrings,
             useOnDeviceRecognition: call.getBool("useOnDeviceRecognition") ?? false,
             preferLegacyRecognizer: call.getBool("preferLegacyRecognizer") ?? false,
-            continuousPTT: call.getBool("continuousPTT") ?? false
+            continuousPTT: call.getBool("continuousPTT") ?? false,
+            useDictationTranscriber: call.getString("iosTranscriber") == "dictation"
         )
 
         if options.continuousPTT && !options.partialResults {
@@ -315,7 +316,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             if #available(iOS 26.0, *),
                options.useOnDeviceRecognition,
                !options.preferLegacyRecognizer,
-               await SpeechAnalyzerRecognitionSupport.supports(locale: locale) {
+               await SpeechAnalyzerRecognitionSupport.supports(locale: locale, kind: options.useDictationTranscriber ? .dictation : .speech) {
                 beginModernRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
             } else {
                 beginLegacyRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
@@ -496,7 +497,8 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             locale: locale,
             maxResults: options.maxResults,
             includePartialResults: options.partialResults,
-            contextualStrings: options.contextualStrings
+            contextualStrings: options.contextualStrings,
+            transcriberKind: options.useDictationTranscriber ? .dictation : .speech
         )
         modernRecognitionSession = session
 
@@ -1005,4 +1007,6 @@ private struct RecognitionOptions {
     /// Skip the modern (SpeechAnalyzer) path even when it is available.
     let preferLegacyRecognizer: Bool
     let continuousPTT: Bool
+    /// iOS 26+ SpeechAnalyzer path only: use `DictationTranscriber` instead of `SpeechTranscriber`.
+    let useDictationTranscriber: Bool
 }

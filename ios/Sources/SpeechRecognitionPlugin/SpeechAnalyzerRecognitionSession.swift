@@ -4,15 +4,112 @@ import Speech
 
 #if compiler(>=6.2)
 
+/// Which Apple transcriber module the SpeechAnalyzer path runs.
+@available(iOS 26.0, *)
+enum SpeechAnalyzerTranscriberKind: String {
+    /// `SpeechTranscriber` (default).
+    case speech
+    /// `DictationTranscriber`, the model behind keyboard dictation.
+    case dictation
+
+    var isAvailable: Bool {
+        switch self {
+        case .speech: return SpeechTranscriber.isAvailable
+        case .dictation: return true
+        }
+    }
+
+    var supportedLocales: [Locale] {
+        get async {
+            switch self {
+            case .speech: return await SpeechTranscriber.supportedLocales
+            case .dictation: return await DictationTranscriber.supportedLocales
+            }
+        }
+    }
+
+    var installedLocales: [Locale] {
+        get async {
+            switch self {
+            case .speech: return await SpeechTranscriber.installedLocales
+            case .dictation: return await DictationTranscriber.installedLocales
+            }
+        }
+    }
+}
+
+/// A transcriber module plus a uniform stream of `(text, isFinal)` results.
+@available(iOS 26.0, *)
+private enum SpeechAnalyzerTranscriber {
+    case speech(SpeechTranscriber)
+    case dictation(DictationTranscriber)
+
+    init(kind: SpeechAnalyzerTranscriberKind, locale: Locale, includePartialResults: Bool) {
+        switch kind {
+        case .speech:
+            let reportingOptions: Set<SpeechTranscriber.ReportingOption> = includePartialResults ? [.volatileResults] : []
+            self = .speech(SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: [],
+                reportingOptions: reportingOptions,
+                attributeOptions: []
+            ))
+        case .dictation:
+            // Without partial results, drop volatile reporting so every word arrives in a final result.
+            var preset = DictationTranscriber.Preset.progressiveShortDictation
+            if !includePartialResults {
+                preset.reportingOptions.remove(.volatileResults)
+            }
+            self = .dictation(DictationTranscriber(locale: locale, preset: preset))
+        }
+    }
+
+    var module: any SpeechModule {
+        switch self {
+        case .speech(let transcriber): return transcriber
+        case .dictation(let transcriber): return transcriber
+        }
+    }
+
+    var results: AsyncThrowingStream<(text: String, isFinal: Bool), Error> {
+        switch self {
+        case .speech(let transcriber):
+            return Self.stream(transcriber.results) { (String($0.text.characters), $0.isFinal) }
+        case .dictation(let transcriber):
+            return Self.stream(transcriber.results) { (String($0.text.characters), $0.isFinal) }
+        }
+    }
+
+    /// One adapter for both result types, so cancellation and error forwarding stay identical.
+    private static func stream<Results: AsyncSequence & Sendable>(
+        _ results: Results,
+        _ transform: @escaping @Sendable (Results.Element) -> (text: String, isFinal: Bool)
+    ) -> AsyncThrowingStream<(text: String, isFinal: Bool), Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await result in results {
+                        continuation.yield(transform(result))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
 @available(iOS 26.0, *)
 enum SpeechAnalyzerRecognitionSupport {
-    static func supports(locale: Locale) async -> Bool {
-        guard SpeechTranscriber.isAvailable else {
+    static func supports(locale: Locale, kind: SpeechAnalyzerTranscriberKind = .speech) async -> Bool {
+        guard kind.isAvailable else {
             return false
         }
 
         let target = normalizedIdentifier(for: locale)
-        let supportedLocales = await SpeechTranscriber.supportedLocales
+        let supportedLocales = await kind.supportedLocales
         return supportedLocales.contains { normalizedIdentifier(for: $0) == target }
     }
 
@@ -59,12 +156,13 @@ final class SpeechAnalyzerRecognitionSession {
     private let locale: Locale
     private let maxResults: Int
     private let includePartialResults: Bool
+    private let transcriberKind: SpeechAnalyzerTranscriberKind
     private let contextualStrings: [String]
     private let processingActor = SpeechAnalyzerAudioProcessingActor()
     private let modelManager = SpeechAnalyzerModelManager()
 
     private lazy var audioEngine = AVAudioEngine()
-    private var transcriber: SpeechTranscriber?
+    private var transcriber: SpeechAnalyzerTranscriber?
     private var analyzer: SpeechAnalyzer?
     private var analyzerInputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analyzerFormat: AVAudioFormat?
@@ -87,36 +185,41 @@ final class SpeechAnalyzerRecognitionSession {
         audioEngine.isRunning || resultTask != nil || isTearingDown
     }
 
-    init(locale: Locale, maxResults: Int, includePartialResults: Bool, contextualStrings: [String] = []) {
+    init(
+        locale: Locale,
+        maxResults: Int,
+        includePartialResults: Bool,
+        contextualStrings: [String] = [],
+        transcriberKind: SpeechAnalyzerTranscriberKind = .speech
+    ) {
         self.locale = locale
         self.maxResults = maxResults
         self.includePartialResults = includePartialResults
+        self.transcriberKind = transcriberKind
         self.contextualStrings = contextualStrings
     }
 
     func start() async throws {
-        guard SpeechTranscriber.isAvailable else {
+        guard transcriberKind.isAvailable else {
             throw SpeechAnalyzerRecognitionError.unavailable
         }
 
-        guard await SpeechAnalyzerRecognitionSupport.supports(locale: locale) else {
+        guard await SpeechAnalyzerRecognitionSupport.supports(locale: locale, kind: transcriberKind) else {
             throw SpeechAnalyzerRecognitionError.unsupportedLocale(
                 SpeechAnalyzerRecognitionSupport.normalizedIdentifier(for: locale)
             )
         }
 
-        let reportingOptions: Set<SpeechTranscriber.ReportingOption> = includePartialResults ? [.volatileResults] : []
-        let transcriber = SpeechTranscriber(
+        let transcriber = SpeechAnalyzerTranscriber(
+            kind: transcriberKind,
             locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: reportingOptions,
-            attributeOptions: []
+            includePartialResults: includePartialResults
         )
 
         self.transcriber = transcriber
-        try await modelManager.ensureModel(for: transcriber, locale: locale)
+        try await modelManager.ensureModel(for: transcriber.module, kind: transcriberKind, locale: locale)
 
-        let modules: [any SpeechModule] = [transcriber]
+        let modules: [any SpeechModule] = [transcriber.module]
         guard let bestFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules) else {
             throw SpeechAnalyzerRecognitionError.setupFailed("Unable to determine a compatible analyzer format.")
         }
@@ -166,13 +269,13 @@ final class SpeechAnalyzerRecognitionSession {
         sharedTeardownTask = nil
     }
 
-    private func startResultTask(for transcriber: SpeechTranscriber) {
+    private func startResultTask(for transcriber: SpeechAnalyzerTranscriber) {
         resultTask = Task { [weak self] in
             guard let self else { return }
 
             do {
                 for try await result in transcriber.results {
-                    let transcript = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !transcript.isEmpty else {
                         continue
                     }
@@ -338,21 +441,21 @@ final class SpeechAnalyzerRecognitionSession {
 private actor SpeechAnalyzerModelManager {
     private var reservedLocales = Set<String>()
 
-    func ensureModel(for transcriber: SpeechTranscriber, locale: Locale) async throws {
-        guard await SpeechAnalyzerRecognitionSupport.supports(locale: locale) else {
+    func ensureModel(for module: any SpeechModule, kind: SpeechAnalyzerTranscriberKind, locale: Locale) async throws {
+        guard await SpeechAnalyzerRecognitionSupport.supports(locale: locale, kind: kind) else {
             throw SpeechAnalyzerRecognitionError.unsupportedLocale(
                 SpeechAnalyzerRecognitionSupport.normalizedIdentifier(for: locale)
             )
         }
 
-        let installedLocales = await SpeechTranscriber.installedLocales
+        let installedLocales = await kind.installedLocales
         let target = SpeechAnalyzerRecognitionSupport.normalizedIdentifier(for: locale)
         let hasInstalledModel = installedLocales.contains {
             SpeechAnalyzerRecognitionSupport.normalizedIdentifier(for: $0) == target
         }
 
         if !hasInstalledModel,
-           let installer = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+           let installer = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
             try await installer.downloadAndInstall()
         }
 

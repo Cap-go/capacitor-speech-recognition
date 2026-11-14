@@ -61,6 +61,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private var stopFallbackWorkItem: DispatchWorkItem?
     private var deferredLegacyStopCalls: [CAPPluginCall] = []
     private var isMicrophoneListening = false
+    private var isLegacyAudioSessionActive = false
 
     private let maxDefaultResults = 5
     private let continuousRestartDelay: TimeInterval = 0.1
@@ -598,6 +599,22 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .duckOthers])
         try session.setMode(.measurement)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+        isLegacyAudioSessionActive = true
+    }
+
+    /// `.duckOthers` keeps other apps' audio lowered until the session is released, so release it once a session ends.
+    private func deactivateLegacyAudioSessionIfNeeded() {
+        guard isLegacyAudioSessionActive else {
+            return
+        }
+
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            // Ignore deactivation failures during cleanup.
+        }
+
+        isLegacyAudioSessionActive = false
     }
 
     private func endLegacyRecognitionCaptureForStop() {
@@ -746,6 +763,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func finalizeFinishedSession(sessionId: Int, reason: ListeningReason, errorCode: String?) {
         clearLegacyRecognitionResources()
+        deactivateLegacyAudioSessionIfNeeded()
         resetContinuousPTTState()
         setMicrophoneListening(false)
         resolveDeferredLegacyStopCalls()

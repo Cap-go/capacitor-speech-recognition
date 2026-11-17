@@ -121,6 +121,23 @@ export interface SpeechRecognitionStartOptions {
    */
   allowForSilence?: number;
   /**
+   * Android 13+: ask the recognizer for a segmented session (`EXTRA_SEGMENTED_SESSION`) of this many milliseconds,
+   * which keeps listening across pauses until it ends or `stop()` is called. Google's recognizer ends it at that
+   * length. Support depends on the recognizer: one that ignores it ends at the first pause, as without this option.
+   *
+   * Each finished segment is added to `accumulated` in a `partialResults` event without `matches`, and the next
+   * segment's `matches` start afresh, so the transcript so far is `accumulated` followed by `matches[0]`. The session
+   * ends with `endOfSegmentedSession`, after which `listeningState` reports `stopped`.
+   *
+   * On Android, `start()` rejects it without `partialResults: true`, with `popup` or with `continuousPTT`, on every
+   * version. Android 12 and below have no segmented sessions, so there the session ends at the first pause, as
+   * without this option. Ignored on iOS (whose recognizer already listens through pauses) and on web.
+   * Off unless greater than zero.
+   *
+   * @since 8.6.0
+   */
+  keepListeningMs?: number;
+  /**
    * EXPERIMENTAL: Keep a PTT session alive across silence by restarting recognition while the button stays held.
    *
    * This restart behavior is implemented for Android inline recognition and iOS native recognition.
@@ -149,7 +166,8 @@ export interface SpeechRecognitionPartialResultEvent {
    */
   matches?: string[];
   /**
-   * Accumulated transcription from earlier continuous PTT cycles.
+   * Accumulated transcription from earlier continuous PTT cycles, or from the finished segments of a
+   * `keepListeningMs` session.
    */
   accumulated?: string;
   /**

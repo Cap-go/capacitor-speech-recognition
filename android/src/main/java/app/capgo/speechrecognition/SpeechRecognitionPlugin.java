@@ -134,7 +134,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             return;
         }
 
-        Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, true);
+        Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, 0, true);
         try {
             supportChecker.checkRecognitionSupport(
                 intent,
@@ -199,6 +199,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         int allowForSilence = call.getInt("allowForSilence", 0);
         boolean continuousPTT = call.getBoolean("continuousPTT", false);
         boolean muteRecognizerBeepOption = call.getBoolean("muteRecognizerBeep", continuousPTT);
+        int keepListeningMs = call.getInt("keepListeningMs", 0);
 
         if (useOnDeviceRecognition && popup) {
             call.reject("On-device recognition is not supported with popup mode on Android.");
@@ -212,6 +213,11 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         if (continuousPTT && !partialResults) {
             call.reject("continuousPTT requires partialResults: true.");
+            return;
+        }
+
+        if (keepListeningMs > 0 && (popup || !partialResults || continuousPTT)) {
+            call.reject("keepListeningMs requires partialResults: true and inline recognition, without continuousPTT.");
             return;
         }
 
@@ -256,7 +262,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             TAG,
             String.format(
                 Locale.US,
-                "Starting recognition | sessionId=%d lang=%s maxResults=%d partial=%s popup=%s onDevice=%s allowForSilence=%d continuousPTT=%s",
+                "Starting recognition | sessionId=%d lang=%s maxResults=%d partial=%s popup=%s onDevice=%s allowForSilence=%d keepListeningMs=%d continuousPTT=%s",
                 currentSessionId,
                 language,
                 maxResults,
@@ -264,6 +270,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                 popup,
                 useOnDeviceRecognition,
                 allowForSilence,
+                keepListeningMs,
                 continuousPTT
             )
         );
@@ -276,6 +283,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             popup,
             call,
             allowForSilence,
+            keepListeningMs,
             useOnDeviceRecognition,
             currentSessionId,
             false
@@ -567,11 +575,20 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         boolean showPopup,
         PluginCall call,
         int allowForSilence,
+        int keepListeningMs,
         boolean useOnDeviceRecognition,
         long currentSessionId,
         boolean restarting
     ) {
-        Intent intent = buildRecognizerIntent(language, maxResults, prompt, partialResults, allowForSilence, useOnDeviceRecognition);
+        Intent intent = buildRecognizerIntent(
+            language,
+            maxResults,
+            prompt,
+            partialResults,
+            allowForSilence,
+            keepListeningMs,
+            useOnDeviceRecognition
+        );
 
         if (showPopup) {
             try {
@@ -628,6 +645,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
         String prompt,
         boolean partialResults,
         int allowForSilence,
+        int keepListeningMs,
         boolean useOnDeviceRecognition
     ) {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
@@ -646,6 +664,14 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
             intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, true);
             intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, allowForSilence);
             intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, allowForSilence);
+        }
+
+        // EXTRA_SEGMENTED_SESSION names the extra that bounds the session. Bounded by length, a session listens across
+        // pauses until stop() or that length, returning each segment through onSegmentResults. Android 12 and below have
+        // no segmented sessions, and there the length extra alone would ask an ordinary session not to end before it.
+        if (keepListeningMs > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS);
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, keepListeningMs);
         }
 
         if (prompt != null) {
@@ -835,6 +861,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
                     false,
                     null,
                     lastAllowForSilence,
+                    0,
                     lastUseOnDeviceRecognition,
                     currentSessionId,
                     true
@@ -1326,16 +1353,43 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
 
         @Override
         public void onSegmentResults(Bundle results) {
+            if (isStale()) {
+                return;
+            }
             ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             if (matches == null) {
                 return;
             }
             notifyListeners(SEGMENT_RESULTS_EVENT, new JSObject().put("matches", new JSArray(matches)));
+
+            // The next segment's partial results start afresh, so carry this one in `accumulated`, as continuous PTT does.
+            String text = matches.isEmpty() ? "" : matches.get(0).trim();
+            if (text.isEmpty()) {
+                return;
+            }
+            JSObject payload;
+            try {
+                lock.lock();
+                if (accumulatedResults.length() > 0) {
+                    accumulatedResults.append(" ");
+                }
+                accumulatedResults.append(text);
+                resetPartialResultsCache();
+                payload = new JSObject().put("accumulated", accumulatedResults.toString());
+            } finally {
+                lock.unlock();
+            }
+            notifyListeners(PARTIAL_RESULTS_EVENT, payload);
         }
 
         @Override
         public void onEndOfSegmentedSession() {
+            if (isStale()) {
+                return;
+            }
             notifyListeners(END_OF_SEGMENT_EVENT, new JSObject());
+            // A segmented session ends here, with no onResults to finish it.
+            finishSession(listenerSessionId, pendingStopReason != null ? pendingStopReason : "results", null);
         }
 
         @Override

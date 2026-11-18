@@ -432,9 +432,10 @@ final class SpeechAnalyzerRecognitionSession {
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        audioSessionGeneration = try AudioSessionOwnership.activate {
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        }
         isAudioSessionActive = true
-        audioSessionGeneration = AudioSessionOwnership.claim()
     }
 
 
@@ -531,6 +532,9 @@ final class SpeechAnalyzerRecognitionSession {
         let progress = SpeechAnalyzerTeardownProgress()
         resultTask = nil
 
+        // abandon() and stage entry share one lock and abandon() runs before the timeout path resumes, so
+        // a stage is either entered before the timeout (then cancelAndFinishNow() below intentionally
+        // overlaps it) or never entered.
         let finishedInTime = await SpeechAnalyzerDeadline.run(deadline: Self.teardownFinalizeDeadline, onTimeout: { progress.abandon() }) {
             guard progress.enter("waitUntilIdle") else {
                 return
@@ -616,7 +620,7 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         // A late teardown must not deactivate audio that a newer session has since activated.
-        if AudioSessionOwnership.isLatest(audioSessionGeneration) {
+        AudioSessionOwnership.deactivateIfLatest(audioSessionGeneration) {
             do {
                 try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             } catch {

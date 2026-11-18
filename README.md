@@ -337,6 +337,8 @@ stop() => Promise<void>
 
 Stops listening and tears down native resources.
 
+On iOS, if a teardown step times out, the promise can resolve while native cleanup is still finishing.
+
 --------------------
 
 

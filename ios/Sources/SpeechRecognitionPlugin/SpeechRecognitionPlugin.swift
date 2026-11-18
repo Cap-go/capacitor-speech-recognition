@@ -604,9 +604,10 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .duckOthers])
         try session.setMode(.measurement)
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        legacyAudioSessionGeneration = try AudioSessionOwnership.activate {
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        }
         isLegacyAudioSessionActive = true
-        legacyAudioSessionGeneration = AudioSessionOwnership.claim()
     }
 
     /// `.duckOthers` keeps other apps' audio lowered until the session is released, so release it once a session ends.
@@ -615,7 +616,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        if AudioSessionOwnership.isLatest(legacyAudioSessionGeneration) {
+        AudioSessionOwnership.deactivateIfLatest(legacyAudioSessionGeneration) {
             do {
                 try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             } catch {
@@ -1090,15 +1091,19 @@ enum AudioSessionOwnership {
     private static let lock = NSLock()
     private static var latest = 0
 
-    static func claim() -> Int {
+    /// Activation and its claim happen under one lock, so a deactivation can't slip between them.
+    static func activate(_ body: () throws -> Void) rethrows -> Int {
         lock.lock(); defer { lock.unlock() }
+        try body()
         latest += 1
         return latest
     }
 
-    static func isLatest(_ generation: Int) -> Bool {
+    static func deactivateIfLatest(_ generation: Int, _ body: () -> Void) {
         lock.lock(); defer { lock.unlock() }
-        return generation == latest
+        if generation == latest {
+            body()
+        }
     }
 }
 

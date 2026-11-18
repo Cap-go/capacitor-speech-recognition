@@ -146,7 +146,7 @@ enum SpeechAnalyzerRecognitionError: LocalizedError {
 
 /// Teardown diagnostics. Stage names and elapsed milliseconds only, never transcript content.
 @available(iOS 26.0, *)
-private enum SpeechAnalyzerTeardownLog {
+enum SpeechAnalyzerTeardownLog {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "SpeechRecognition",
         category: "SpeechAnalyzerTeardown"
@@ -158,6 +158,10 @@ private enum SpeechAnalyzerTeardownLog {
 
     static func deadlineFired(_ stage: String, deadline: Duration, since start: ContinuousClock.Instant) {
         logger.error("teardown deadline fired stage=\(stage, privacy: .public) deadline=\(String(describing: deadline), privacy: .public) elapsedMs=\(elapsedMs(since: start), privacy: .public)")
+    }
+
+    static func stopBackstopFired(deadline: TimeInterval) {
+        logger.error("stop backstop fired deadline=\(deadline, privacy: .public)s")
     }
 
     private static func elapsedMs(since start: ContinuousClock.Instant) -> Int {
@@ -172,6 +176,7 @@ private final class SpeechAnalyzerTeardownProgress: @unchecked Sendable {
     private let lock = NSLock()
     private var current = "start"
     private var finalizedCleanly = true
+    private var abandoned = false
 
     var stage: String {
         lock.lock(); defer { lock.unlock() }
@@ -183,9 +188,19 @@ private final class SpeechAnalyzerTeardownProgress: @unchecked Sendable {
         return finalizedCleanly
     }
 
-    func enter(_ stage: String) {
+    /// Returns false once the deadline path has taken over, so an abandoned worker starts no later stage.
+    func enter(_ stage: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        guard !abandoned else {
+            return false
+        }
         current = stage
+        return true
+    }
+
+    func abandon() {
+        lock.lock(); defer { lock.unlock() }
+        abandoned = true
     }
 
     func markFinalizeFailed() {
@@ -211,6 +226,26 @@ private final class SpeechAnalyzerDeadlineGate: @unchecked Sendable {
     }
 }
 
+/// A `releaseLocales()` that outlived its deadline. Reservations are app-wide, so the next session
+/// waits (bounded) for it; otherwise it could remove the reservation that session just reused.
+@available(iOS 26.0, *)
+private final class SpeechAnalyzerPendingLocaleRelease: @unchecked Sendable {
+    static let shared = SpeechAnalyzerPendingLocaleRelease()
+    private let lock = NSLock()
+    private var pending: Task<Void, Never>?
+
+    func set(_ task: Task<Void, Never>) {
+        lock.lock(); defer { lock.unlock() }
+        pending = task
+    }
+
+    func take() -> Task<Void, Never>? {
+        lock.lock(); defer { lock.unlock() }
+        defer { pending = nil }
+        return pending
+    }
+}
+
 @available(iOS 26.0, *)
 private enum SpeechAnalyzerDeadline {
     /// Runs `operation` and returns true if it finished within `deadline`, false if the timer won.
@@ -226,8 +261,8 @@ private enum SpeechAnalyzerDeadline {
             }
             Task {
                 try? await Task.sleep(for: deadline)
-                work.cancel()
                 gate.resume(continuation, with: false)
+                work.cancel()
             }
         }
     }
@@ -269,6 +304,8 @@ final class SpeechAnalyzerRecognitionSession {
     private var isTearingDown = false
     private var sharedTeardownTask: Task<Void, Never>?
     private var isAudioSessionActive = false
+    private var audioSessionGeneration = 0
+    private static var latestAudioSessionGeneration = 0
 
     var onListeningStarted: VoidHandler?
     var onListeningStopped: VoidHandler?
@@ -395,6 +432,8 @@ final class SpeechAnalyzerRecognitionSession {
         try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         isAudioSessionActive = true
+        Self.latestAudioSessionGeneration += 1
+        audioSessionGeneration = Self.latestAudioSessionGeneration
     }
 
 
@@ -489,17 +528,20 @@ final class SpeechAnalyzerRecognitionSession {
         let drainingTask = resultTask
         let audioBuffers = inFlightAudioBuffers
         let progress = SpeechAnalyzerTeardownProgress()
-        analyzerInputContinuation = nil
         resultTask = nil
 
         let finishedInTime = await SpeechAnalyzerDeadline.run(deadline: Self.teardownFinalizeDeadline) {
-            progress.enter("waitUntilIdle")
+            guard progress.enter("waitUntilIdle") else {
+                return
+            }
             await audioBuffers.waitUntilIdle()
             SpeechAnalyzerTeardownLog.stage("waitUntilIdle", since: teardownStart)
 
             inputContinuation?.finish()
 
-            progress.enter("finalizeAndFinishThroughEndOfInput")
+            guard progress.enter("finalizeAndFinishThroughEndOfInput") else {
+                return
+            }
             do {
                 try await analyzer?.finalizeAndFinishThroughEndOfInput()
             } catch {
@@ -510,7 +552,9 @@ final class SpeechAnalyzerRecognitionSession {
             SpeechAnalyzerTeardownLog.stage("finalizeAndFinishThroughEndOfInput", since: teardownStart)
 
             if let drainingTask {
-                progress.enter("drainResults")
+                guard progress.enter("drainResults") else {
+                    return
+                }
                 if !progress.didFinalizeCleanly {
                     drainingTask.cancel()
                 }
@@ -522,6 +566,7 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         if !finishedInTime {
+            progress.abandon()
             SpeechAnalyzerTeardownLog.deadlineFired(progress.stage, deadline: Self.teardownFinalizeDeadline, since: teardownStart)
             inputContinuation?.finish()
             drainingTask?.cancel()
@@ -535,17 +580,23 @@ final class SpeechAnalyzerRecognitionSession {
             }
         }
 
+        // Input stayed open through the bounded drain so queued buffers were still submitted. Clearing
+        // it here stops any late buffer from submitting.
+        inputContinuation?.finish()
+        analyzerInputContinuation = nil
         self.analyzer = nil
         analyzerFormat = nil
         transcriber = nil
 
         let manager = modelManager
+        let releaseTask = Task { await manager.releaseLocales() }
         let released = await SpeechAnalyzerDeadline.run(deadline: Self.teardownReleaseLocalesDeadline) {
-            await manager.releaseLocales()
+            await releaseTask.value
         }
         if released {
             SpeechAnalyzerTeardownLog.stage("releaseLocales", since: teardownStart)
         } else {
+            SpeechAnalyzerPendingLocaleRelease.shared.set(releaseTask)
             SpeechAnalyzerTeardownLog.deadlineFired("releaseLocales", deadline: Self.teardownReleaseLocalesDeadline, since: teardownStart)
         }
 
@@ -564,10 +615,13 @@ final class SpeechAnalyzerRecognitionSession {
             return
         }
 
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        } catch {
-            // Ignore deactivation failures during cleanup.
+        // A late teardown must not deactivate audio that a newer session has since activated.
+        if audioSessionGeneration == Self.latestAudioSessionGeneration {
+            do {
+                try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            } catch {
+                // Ignore deactivation failures during cleanup.
+            }
         }
 
         isAudioSessionActive = false
@@ -611,6 +665,11 @@ private actor SpeechAnalyzerModelManager {
     }
 
     private func reserveLocaleIfNeeded(_ locale: Locale) async throws {
+        if let lateRelease = SpeechAnalyzerPendingLocaleRelease.shared.take() {
+            _ = await SpeechAnalyzerDeadline.run(deadline: .seconds(1)) {
+                await lateRelease.value
+            }
+        }
         let target = SpeechAnalyzerRecognitionSupport.normalizedIdentifier(for: locale)
         let existingReservations = await AssetInventory.reservedLocales
         let hasReservation = existingReservations.contains {

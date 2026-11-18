@@ -689,8 +689,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         if #available(iOS 26.0, *),
            let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession,
            !sessionAlreadyStopped {
-            Task { @MainActor in
-                await modernSession.stop()
+            stopModernSessionWithDeadline(modernSession) {
                 if self.modernRecognitionSession === modernSession {
                     self.modernRecognitionSession = nil
                 }
@@ -713,6 +712,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     /// would otherwise keep isRecognitionActive true and reject every start() until relaunch.
     private func resolveAfterClearingOrphanedModernSession(_ call: CAPPluginCall) {
         if #available(iOS 26.0, *), let orphan = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
+            setMicrophoneListening(false)
             stopModernSessionWithDeadline(orphan) {
                 if self.modernRecognitionSession === orphan {
                     self.modernRecognitionSession = nil
@@ -739,7 +739,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             guard !Task.isCancelled, once.claim() else {
                 return
             }
-            NSLog("[SpeechRecognition] stop deadline fired; finishing session without waiting for the analyzer")
+            SpeechAnalyzerTeardownLog.stopBackstopFired(deadline: Self.modernStopDeadlineSeconds)
             settle()
         }
         Task { @MainActor in
@@ -810,11 +810,14 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func finalizeFinishedSession(sessionId: Int, reason: ListeningReason, errorCode: String?) {
-        clearLegacyRecognitionResources()
-        deactivateLegacyAudioSessionIfNeeded()
-        resetContinuousPTTState()
-        setMicrophoneListening(false)
-        resolveDeferredLegacyStopCalls()
+        // A late finish for an older session must not reset state a newer session now owns.
+        if activeSessionId == nil {
+            clearLegacyRecognitionResources()
+            deactivateLegacyAudioSessionIfNeeded()
+            resetContinuousPTTState()
+            setMicrophoneListening(false)
+            resolveDeferredLegacyStopCalls()
+        }
         notifyListeners("readyForNextSession", data: ["sessionId": sessionId])
         emitListeningState(state: "stopped", sessionId: sessionId, reason: reason, errorCode: errorCode, status: "stopped")
     }

@@ -1091,17 +1091,21 @@ enum AudioSessionOwnership {
     private static let lock = NSLock()
     private static var latest = 0
 
-    /// Activation and its claim happen under one lock, so a deactivation can't slip between them.
+    /// The lock guards only the generation counter, never an AVAudioSession call, so a hung setActive
+    /// can't block the next start. Claiming after activation keeps "newest activation wins".
     static func activate(_ body: () throws -> Void) rethrows -> Int {
-        lock.lock(); defer { lock.unlock() }
         try body()
+        lock.lock(); defer { lock.unlock() }
         latest += 1
         return latest
     }
 
+    /// The check-then-deactivate window is accepted: a rare lost activation beats a blocked main thread.
     static func deactivateIfLatest(_ generation: Int, _ body: () -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        if generation == latest {
+        lock.lock()
+        let isLatest = generation == latest
+        lock.unlock()
+        if isLatest {
             body()
         }
     }

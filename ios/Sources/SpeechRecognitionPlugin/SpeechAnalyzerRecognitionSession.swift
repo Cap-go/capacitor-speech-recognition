@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Speech
+import os
 
 #if compiler(>=6.2)
 
@@ -143,6 +144,95 @@ enum SpeechAnalyzerRecognitionError: LocalizedError {
     }
 }
 
+/// Teardown diagnostics. Stage names and elapsed milliseconds only, never transcript content.
+@available(iOS 26.0, *)
+private enum SpeechAnalyzerTeardownLog {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "SpeechRecognition",
+        category: "SpeechAnalyzerTeardown"
+    )
+
+    static func stage(_ name: String, since start: ContinuousClock.Instant) {
+        logger.notice("teardown stage=\(name, privacy: .public) elapsedMs=\(elapsedMs(since: start), privacy: .public)")
+    }
+
+    static func deadlineFired(_ stage: String, deadline: Duration, since start: ContinuousClock.Instant) {
+        logger.error("teardown deadline fired stage=\(stage, privacy: .public) deadline=\(String(describing: deadline), privacy: .public) elapsedMs=\(elapsedMs(since: start), privacy: .public)")
+    }
+
+    private static func elapsedMs(since start: ContinuousClock.Instant) -> Int {
+        let parts = (ContinuousClock.now - start).components
+        return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+    }
+}
+
+/// The stage a teardown block is currently awaiting, readable from the deadline path.
+@available(iOS 26.0, *)
+private final class SpeechAnalyzerTeardownProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = "start"
+    private var finalizedCleanly = true
+
+    var stage: String {
+        lock.lock(); defer { lock.unlock() }
+        return current
+    }
+
+    var didFinalizeCleanly: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return finalizedCleanly
+    }
+
+    func enter(_ stage: String) {
+        lock.lock(); defer { lock.unlock() }
+        current = stage
+    }
+
+    func markFinalizeFailed() {
+        lock.lock(); defer { lock.unlock() }
+        finalizedCleanly = false
+    }
+}
+
+/// Resumes a continuation at most once, from whichever of work or timer finishes first.
+@available(iOS 26.0, *)
+private final class SpeechAnalyzerDeadlineGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var decided = false
+
+    func resume(_ continuation: CheckedContinuation<Bool, Never>, with completed: Bool) {
+        lock.lock()
+        let first = !decided
+        decided = true
+        lock.unlock()
+        if first {
+            continuation.resume(returning: completed)
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+private enum SpeechAnalyzerDeadline {
+    /// Runs `operation` and returns true if it finished within `deadline`, false if the timer won.
+    /// The work runs in its own unstructured task on purpose: a task group would wait for a child that
+    /// ignores cancellation, which is the hang this guards against. A timed-out operation is cancelled
+    /// and abandoned, so it must only touch values it captured.
+    static func run(deadline: Duration, operation: @escaping @Sendable () async -> Void) async -> Bool {
+        let gate = SpeechAnalyzerDeadlineGate()
+        return await withCheckedContinuation { continuation in
+            let work = Task {
+                await operation()
+                gate.resume(continuation, with: true)
+            }
+            Task {
+                try? await Task.sleep(for: deadline)
+                work.cancel()
+                gate.resume(continuation, with: false)
+            }
+        }
+    }
+}
+
 @available(iOS 26.0, *)
 @MainActor
 final class SpeechAnalyzerRecognitionSession {
@@ -152,6 +242,13 @@ final class SpeechAnalyzerRecognitionSession {
     typealias AudioLevelHandler = @MainActor (Float) -> Void
 
     private static let microphoneTapBufferSize: AVAudioFrameCount = 2048
+    /// Budget for draining in-flight audio, finalizing the analyzer and draining results. COR-4381:
+    /// these awaits never returned on device, which left the plugin reporting "already running".
+    static let teardownFinalizeDeadline: Duration = .seconds(2)
+    /// Budget for `cancelAndFinishNow()` after the finalize deadline fires.
+    static let teardownCancelDeadline: Duration = .seconds(1)
+    /// Budget for releasing the reserved locales.
+    static let teardownReleaseLocalesDeadline: Duration = .seconds(1)
 
     private let locale: Locale
     private let maxResults: Int
@@ -372,6 +469,8 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         isTearingDown = true
+        let clock = ContinuousClock()
+        let teardownStart = clock.now
 
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -381,41 +480,79 @@ final class SpeechAnalyzerRecognitionSession {
             audioEngine.inputNode.removeTap(onBus: 0)
             hasInstalledTap = false
         }
+        SpeechAnalyzerTeardownLog.stage("engineStopped", since: teardownStart)
 
-        await inFlightAudioBuffers.waitUntilIdle()
-
-        analyzerInputContinuation?.finish()
+        // Everything the bounded block touches is captured here, so a block that outlives its
+        // deadline cannot reach session state that a later start() may own.
+        let analyzer = self.analyzer
+        let inputContinuation = analyzerInputContinuation
+        let drainingTask = resultTask
+        let audioBuffers = inFlightAudioBuffers
+        let progress = SpeechAnalyzerTeardownProgress()
         analyzerInputContinuation = nil
+        resultTask = nil
 
-        var finalizedCleanly = true
-        do {
-            try await analyzer?.finalizeAndFinishThroughEndOfInput()
-        } catch {
-            // Best-effort shutdown. The plugin still needs native cleanup to succeed.
-            finalizedCleanly = false
-            await analyzer?.cancelAndFinishNow()
+        let finishedInTime = await SpeechAnalyzerDeadline.run(deadline: Self.teardownFinalizeDeadline) {
+            progress.enter("waitUntilIdle")
+            await audioBuffers.waitUntilIdle()
+            SpeechAnalyzerTeardownLog.stage("waitUntilIdle", since: teardownStart)
+
+            inputContinuation?.finish()
+
+            progress.enter("finalizeAndFinishThroughEndOfInput")
+            do {
+                try await analyzer?.finalizeAndFinishThroughEndOfInput()
+            } catch {
+                // Best-effort shutdown. The plugin still needs native cleanup to succeed.
+                progress.markFinalizeFailed()
+                await analyzer?.cancelAndFinishNow()
+            }
+            SpeechAnalyzerTeardownLog.stage("finalizeAndFinishThroughEndOfInput", since: teardownStart)
+
+            if let drainingTask {
+                progress.enter("drainResults")
+                if !progress.didFinalizeCleanly {
+                    drainingTask.cancel()
+                }
+                if !callerIsResultTask {
+                    _ = await drainingTask.value
+                }
+                SpeechAnalyzerTeardownLog.stage("drainResults", since: teardownStart)
+            }
         }
 
-        if let drainingTask = resultTask {
-            resultTask = nil
-            if !finalizedCleanly {
-                drainingTask.cancel()
+        if !finishedInTime {
+            SpeechAnalyzerTeardownLog.deadlineFired(progress.stage, deadline: Self.teardownFinalizeDeadline, since: teardownStart)
+            inputContinuation?.finish()
+            drainingTask?.cancel()
+            let cancelled = await SpeechAnalyzerDeadline.run(deadline: Self.teardownCancelDeadline) {
+                await analyzer?.cancelAndFinishNow()
             }
-            if !callerIsResultTask {
-                _ = await drainingTask.value
+            if cancelled {
+                SpeechAnalyzerTeardownLog.stage("cancelAndFinishNow", since: teardownStart)
+            } else {
+                SpeechAnalyzerTeardownLog.deadlineFired("cancelAndFinishNow", deadline: Self.teardownCancelDeadline, since: teardownStart)
             }
-        } else {
-            resultTask = nil
         }
 
-        analyzer = nil
+        self.analyzer = nil
         analyzerFormat = nil
         transcriber = nil
 
-        await modelManager.releaseLocales()
+        let manager = modelManager
+        let released = await SpeechAnalyzerDeadline.run(deadline: Self.teardownReleaseLocalesDeadline) {
+            await manager.releaseLocales()
+        }
+        if released {
+            SpeechAnalyzerTeardownLog.stage("releaseLocales", since: teardownStart)
+        } else {
+            SpeechAnalyzerTeardownLog.deadlineFired("releaseLocales", deadline: Self.teardownReleaseLocalesDeadline, since: teardownStart)
+        }
+
         deactivateAudioSessionIfNeeded()
 
         isTearingDown = false
+        SpeechAnalyzerTeardownLog.stage("done", since: teardownStart)
 
         if notifyStopped {
             onListeningStopped?()

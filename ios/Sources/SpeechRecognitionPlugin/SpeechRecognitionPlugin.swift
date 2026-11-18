@@ -65,6 +65,8 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private let maxDefaultResults = 5
     private let continuousRestartDelay: TimeInterval = 0.1
+    /// Backstop above the session's own bounded teardown (2 s + 1 s + 1 s worst case).
+    private static let modernStopDeadlineSeconds: TimeInterval = 6
 
     @objc func available(_ call: CAPPluginCall) {
         let locale = Locale(identifier: call.getString("language") ?? Locale.current.identifier)
@@ -177,7 +179,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func stop(_ call: CAPPluginCall) {
         guard let sessionId = activeSessionId else {
-            call.resolve()
+            resolveAfterClearingOrphanedModernSession(call)
             return
         }
 
@@ -187,8 +189,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         setMicrophoneListening(false)
 
         if #available(iOS 26.0, *), let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
-            Task { @MainActor in
-                await modernSession.stop()
+            stopModernSessionWithDeadline(modernSession) {
                 self.finishSessionIfNeeded(sessionId: sessionId, reason: .userStop, errorCode: nil, sessionAlreadyStopped: true)
                 call.resolve()
             }
@@ -213,7 +214,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func forceStop(_ call: CAPPluginCall) {
         guard let sessionId = activeSessionId else {
-            call.resolve()
+            resolveAfterClearingOrphanedModernSession(call)
             return
         }
 
@@ -227,8 +228,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         if #available(iOS 26.0, *), let modernSession = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
-            Task { @MainActor in
-                await modernSession.stop()
+            stopModernSessionWithDeadline(modernSession) {
                 self.finishSessionIfNeeded(sessionId: sessionId, reason: .forceStop, errorCode: nil, sessionAlreadyStopped: true)
                 call.resolve()
             }
@@ -318,6 +318,11 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                options.useOnDeviceRecognition,
                !options.preferLegacyRecognizer,
                await SpeechAnalyzerRecognitionSupport.supports(locale: locale, kind: options.useDictationTranscriber ? .dictation : .speech) {
+                // stop() may have run during the await above. It already rejected the pending start call,
+                // so starting now would store a session no later stop() could clear.
+                guard activeSessionId == sessionId else {
+                    return
+                }
                 beginModernRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
             } else {
                 beginLegacyRecognition(call: call, options: options, locale: locale, sessionId: sessionId, restarting: restarting)
@@ -704,6 +709,49 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         finalizeFinishedSession(sessionId: sessionId, reason: reason, errorCode: errorCode)
     }
 
+    /// stop()/forceStop() with no active session id: a modern session stored after its id was cleared
+    /// would otherwise keep isRecognitionActive true and reject every start() until relaunch.
+    private func resolveAfterClearingOrphanedModernSession(_ call: CAPPluginCall) {
+        if #available(iOS 26.0, *), let orphan = modernRecognitionSession as? SpeechAnalyzerRecognitionSession {
+            stopModernSessionWithDeadline(orphan) {
+                if self.modernRecognitionSession === orphan {
+                    self.modernRecognitionSession = nil
+                }
+                call.resolve()
+            }
+            return
+        }
+        call.resolve()
+    }
+
+    /// Stops `session`, then runs `settle` exactly once: when the stop returns, or when
+    /// `modernStopDeadline` passes first. COR-4381: a stop that never returned left `activeSessionId`
+    /// set and rejected every later start(). `settle` must be safe for a stale session: callers guard
+    /// on `activeSessionId == sessionId` and `modernRecognitionSession === session`.
+    @available(iOS 26.0, *)
+    private func stopModernSessionWithDeadline(
+        _ session: SpeechAnalyzerRecognitionSession,
+        settle: @escaping @MainActor () -> Void
+    ) {
+        let once = ModernStopSettleOnce()
+        let deadline = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(Self.modernStopDeadlineSeconds * 1_000_000_000))
+            guard !Task.isCancelled, once.claim() else {
+                return
+            }
+            NSLog("[SpeechRecognition] stop deadline fired; finishing session without waiting for the analyzer")
+            settle()
+        }
+        Task { @MainActor in
+            await session.stop()
+            deadline.cancel()
+            guard once.claim() else {
+                return
+            }
+            settle()
+        }
+    }
+
     private func rejectPendingStartCallIfNeeded(message: String) {
         guard let startCall = activeCall else {
             return
@@ -1027,4 +1075,20 @@ private struct RecognitionOptions {
     let continuousPTT: Bool
     /// iOS 26+ SpeechAnalyzer path only: use `DictationTranscriber` instead of `SpeechTranscriber`.
     let useDictationTranscriber: Bool
+}
+
+/// One-shot claim shared by a session stop and its backstop deadline.
+private final class ModernStopSettleOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !claimed else {
+            return false
+        }
+        claimed = true
+        return true
+    }
 }

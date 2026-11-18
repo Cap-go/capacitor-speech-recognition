@@ -215,12 +215,15 @@ private final class SpeechAnalyzerDeadlineGate: @unchecked Sendable {
     private let lock = NSLock()
     private var decided = false
 
-    func resume(_ continuation: CheckedContinuation<Bool, Never>, with completed: Bool) {
+    /// `beforeResume` runs only when this call wins, ahead of the resume, so the timeout decision and
+    /// whatever it must invalidate (the abandoned worker) are settled before the caller moves on.
+    func resume(_ continuation: CheckedContinuation<Bool, Never>, with completed: Bool, beforeResume: (() -> Void)? = nil) {
         lock.lock()
         let first = !decided
         decided = true
         lock.unlock()
         if first {
+            beforeResume?()
             continuation.resume(returning: completed)
         }
     }
@@ -252,7 +255,7 @@ private enum SpeechAnalyzerDeadline {
     /// The work runs in its own unstructured task on purpose: a task group would wait for a child that
     /// ignores cancellation, which is the hang this guards against. A timed-out operation is cancelled
     /// and abandoned, so it must only touch values it captured.
-    static func run(deadline: Duration, operation: @escaping @Sendable () async -> Void) async -> Bool {
+    static func run(deadline: Duration, onTimeout: (@Sendable () -> Void)? = nil, operation: @escaping @Sendable () async -> Void) async -> Bool {
         let gate = SpeechAnalyzerDeadlineGate()
         return await withCheckedContinuation { continuation in
             let work = Task {
@@ -261,7 +264,7 @@ private enum SpeechAnalyzerDeadline {
             }
             Task {
                 try? await Task.sleep(for: deadline)
-                gate.resume(continuation, with: false)
+                gate.resume(continuation, with: false, beforeResume: onTimeout)
                 work.cancel()
             }
         }
@@ -305,7 +308,6 @@ final class SpeechAnalyzerRecognitionSession {
     private var sharedTeardownTask: Task<Void, Never>?
     private var isAudioSessionActive = false
     private var audioSessionGeneration = 0
-    private static var latestAudioSessionGeneration = 0
 
     var onListeningStarted: VoidHandler?
     var onListeningStopped: VoidHandler?
@@ -432,8 +434,7 @@ final class SpeechAnalyzerRecognitionSession {
         try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         isAudioSessionActive = true
-        Self.latestAudioSessionGeneration += 1
-        audioSessionGeneration = Self.latestAudioSessionGeneration
+        audioSessionGeneration = AudioSessionOwnership.claim()
     }
 
 
@@ -530,18 +531,18 @@ final class SpeechAnalyzerRecognitionSession {
         let progress = SpeechAnalyzerTeardownProgress()
         resultTask = nil
 
-        let finishedInTime = await SpeechAnalyzerDeadline.run(deadline: Self.teardownFinalizeDeadline) {
+        let finishedInTime = await SpeechAnalyzerDeadline.run(deadline: Self.teardownFinalizeDeadline, onTimeout: { progress.abandon() }) {
             guard progress.enter("waitUntilIdle") else {
                 return
             }
             await audioBuffers.waitUntilIdle()
             SpeechAnalyzerTeardownLog.stage("waitUntilIdle", since: teardownStart)
 
-            inputContinuation?.finish()
-
             guard progress.enter("finalizeAndFinishThroughEndOfInput") else {
                 return
             }
+
+            inputContinuation?.finish()
             do {
                 try await analyzer?.finalizeAndFinishThroughEndOfInput()
             } catch {
@@ -566,7 +567,6 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         if !finishedInTime {
-            progress.abandon()
             SpeechAnalyzerTeardownLog.deadlineFired(progress.stage, deadline: Self.teardownFinalizeDeadline, since: teardownStart)
             inputContinuation?.finish()
             drainingTask?.cancel()
@@ -616,7 +616,7 @@ final class SpeechAnalyzerRecognitionSession {
         }
 
         // A late teardown must not deactivate audio that a newer session has since activated.
-        if audioSessionGeneration == Self.latestAudioSessionGeneration {
+        if AudioSessionOwnership.isLatest(audioSessionGeneration) {
             do {
                 try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             } catch {

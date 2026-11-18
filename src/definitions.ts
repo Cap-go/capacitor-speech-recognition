@@ -252,6 +252,7 @@ export interface SpeechRecognitionAudioLevelEvent {
 
 /**
  * Emitted after native resources have been torn down and the plugin is ready for another session.
+ * On iOS, if a teardown step times out, this means the plugin accepts a new start while native cleanup may still be finishing.
  */
 export interface SpeechRecognitionReadyEvent {
   sessionId: number;

@@ -219,7 +219,7 @@ The plugin also emits deterministic session lifecycle events so UIs can react cl
 
 - `listeningState` now carries `state`, `sessionId`, `reason`, and optional `errorCode` in addition to the legacy `status`.
 - `error` is emitted for every native recognizer error instead of relying only on promise rejections.
-- `readyForNextSession` signals when native resources are torn down and the plugin is ready for another start.
+- `readyForNextSession` signals when native resources are torn down and the plugin is ready for another start. On iOS, if a teardown step times out, it means the plugin accepts a new start while native cleanup may still be finishing.
 
 ### iOS usage descriptions
 
@@ -768,6 +768,7 @@ Emitted on iOS and Android only. Web accepts listener registration but does not 
 #### SpeechRecognitionReadyEvent
 
 Emitted after native resources have been torn down and the plugin is ready for another session.
+On iOS, if a teardown step times out, this means the plugin accepts a new start while native cleanup may still be finishing.
 
 | Prop            | Type                |
 | --------------- | ------------------- |

@@ -62,6 +62,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private var deferredLegacyStopCalls: [CAPPluginCall] = []
     private var isMicrophoneListening = false
     private var isLegacyAudioSessionActive = false
+    private var legacyAudioSessionGeneration = 0
 
     private let maxDefaultResults = 5
     private let continuousRestartDelay: TimeInterval = 0.1
@@ -605,6 +606,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         try session.setMode(.measurement)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         isLegacyAudioSessionActive = true
+        legacyAudioSessionGeneration = AudioSessionOwnership.claim()
     }
 
     /// `.duckOthers` keeps other apps' audio lowered until the session is released, so release it once a session ends.
@@ -613,10 +615,12 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        } catch {
-            // Ignore deactivation failures during cleanup.
+        if AudioSessionOwnership.isLatest(legacyAudioSessionGeneration) {
+            do {
+                try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            } catch {
+                // Ignore deactivation failures during cleanup.
+            }
         }
 
         isLegacyAudioSessionActive = false
@@ -1078,6 +1082,24 @@ private struct RecognitionOptions {
     let continuousPTT: Bool
     /// iOS 26+ SpeechAnalyzer path only: use `DictationTranscriber` instead of `SpeechTranscriber`.
     let useDictationTranscriber: Bool
+}
+
+/// Which recognition path activated the shared AVAudioSession last, so a late teardown on one path
+/// doesn't deactivate audio a newer session on either path now owns.
+enum AudioSessionOwnership {
+    private static let lock = NSLock()
+    private static var latest = 0
+
+    static func claim() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        latest += 1
+        return latest
+    }
+
+    static func isLatest(_ generation: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return generation == latest
+    }
 }
 
 /// One-shot claim shared by a session stop and its backstop deadline.

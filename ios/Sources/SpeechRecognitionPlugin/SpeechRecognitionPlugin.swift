@@ -1112,7 +1112,7 @@ enum AudioSessionOwnership {
 }
 
 /// One-shot claim shared by a session stop and its backstop deadline.
-private final class ModernStopSettleOnce: @unchecked Sendable {
+final class ModernStopSettleOnce: @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
 

@@ -337,4 +337,58 @@ final class SpeechRecognitionPluginTests: XCTestCase {
         XCTAssertEqual(availabilityRoute, .legacy)
         XCTAssertFalse(beginRecognitionUsesModern)
     }
+
+    func testSpeechAnalyzerDeadline_returnsFalseWhenOperationNeverFinishes() async throws {
+        guard #available(iOS 26.0, *) else {
+            throw XCTSkip("SpeechAnalyzer needs iOS 26")
+        }
+        let neverReleased = AsyncTestGate()
+        let timedOut = AsyncTestFlag()
+        let started = ContinuousClock.now
+
+        let finished = await SpeechAnalyzerDeadline.run(
+            deadline: .milliseconds(200),
+            onTimeout: { timedOut.set() },
+            operation: { await neverReleased.awaitRelease() }
+        )
+
+        XCTAssertFalse(finished)
+        XCTAssertTrue(timedOut.get())
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(2))
+        neverReleased.release()
+    }
+
+    func testSpeechAnalyzerDeadline_returnsTrueWhenOperationFinishesInTime() async throws {
+        guard #available(iOS 26.0, *) else {
+            throw XCTSkip("SpeechAnalyzer needs iOS 26")
+        }
+        let timedOut = AsyncTestFlag()
+
+        let finished = await SpeechAnalyzerDeadline.run(
+            deadline: .seconds(5),
+            onTimeout: { timedOut.set() },
+            operation: {}
+        )
+
+        XCTAssertTrue(finished)
+        XCTAssertFalse(timedOut.get())
+    }
+
+    func testModernStopSettleOnce_onlyOneOfStopAndBackstopSettles() async {
+        let once = ModernStopSettleOnce()
+
+        let winners = await withTaskGroup(of: Bool.self) { group in
+            for _ in 0..<64 {
+                group.addTask { once.claim() }
+            }
+            var count = 0
+            for await won in group where won {
+                count += 1
+            }
+            return count
+        }
+
+        XCTAssertEqual(winners, 1)
+        XCTAssertFalse(once.claim())
+    }
 }

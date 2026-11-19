@@ -211,7 +211,7 @@ private final class SpeechAnalyzerTeardownProgress: @unchecked Sendable {
 
 /// Resumes a continuation at most once, from whichever of work or timer finishes first.
 @available(iOS 26.0, *)
-private final class SpeechAnalyzerDeadlineGate: @unchecked Sendable {
+final class SpeechAnalyzerDeadlineGate: @unchecked Sendable {
     private let lock = NSLock()
     private var decided = false
 
@@ -250,7 +250,7 @@ private final class SpeechAnalyzerPendingLocaleRelease: @unchecked Sendable {
 }
 
 @available(iOS 26.0, *)
-private enum SpeechAnalyzerDeadline {
+enum SpeechAnalyzerDeadline {
     /// Runs `operation` and returns true if it finished within `deadline`, false if the timer won.
     /// The work runs in its own unstructured task on purpose: a task group would wait for a child that
     /// ignores cancellation, which is the hang this guards against. A timed-out operation is cancelled
